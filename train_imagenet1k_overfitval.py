@@ -23,9 +23,6 @@ from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 import matplotlib
 matplotlib.use('Agg')
-import numpy as np
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
 
 # ============================================================================
 # CliffordNet Model Components
@@ -198,7 +195,7 @@ def cliffordnet_small(num_classes=1000):
     return CliffordNet(
         embed_dim=192,
         depth=12,
-        shifts=[1, 2, 4, 8],
+        shifts=[1, 2, 4],
         num_classes=num_classes,
         drop_path_rate=0.1,
     )
@@ -263,10 +260,6 @@ class CliffordNetLightning(L.LightningModule):
             "inv_std", torch.tensor(IMAGENET_DEFAULT_STD).view(1, 3, 1, 1)
         )
 
-        # For confusion matrix accumulation
-        self.val_preds = []
-        self.val_labels = []
-
     def forward(self, x):
         return self.model(x.contiguous(memory_format=torch.channels_last))
         # return self.model(x)
@@ -294,88 +287,11 @@ class CliffordNetLightning(L.LightningModule):
         self.log("val/acc1", acc1, prog_bar=True, sync_dist=True)
         self.log("val/acc5", acc5, prog_bar=True, sync_dist=True)
 
-        # Accumulate predictions for confusion matrix
-        preds = outputs.argmax(dim=1)
-        self.val_preds.append(preds.cpu())
-        self.val_labels.append(labels.cpu())
-
         # Image/text visualization: only rank 0, only first batch
         if batch_idx == 0 and self.trainer.is_global_zero:
             self._log_images(images, labels, outputs)
 
         return loss
-
-    def on_validation_epoch_end(self):
-        if not self.trainer.is_global_zero:
-            self.val_preds.clear()
-            self.val_labels.clear()
-            return
-
-        all_preds = torch.cat(self.val_preds).numpy()
-        all_labels = torch.cat(self.val_labels).numpy()
-
-        # Compute confusion matrix
-        cm = confusion_matrix(all_labels, all_preds, labels=range(self.model.num_classes))
-
-        # Normalize confusion matrix
-        cm_normalized = cm.astype('float') / (cm.sum(axis=1, keepdims=True) + 1e-8)
-
-        # Create figure - for 1000 classes, use a smaller figure with aggregated view
-        num_classes = self.model.num_classes
-        if num_classes > 100:
-            # For large class counts, show top-k confused pairs instead
-            self._log_top_confused_pairs(cm, all_labels, all_preds)
-        else:
-            # For smaller class counts, show full confusion matrix
-            fig, ax = plt.subplots(figsize=(12, 10))
-            sns.heatmap(cm_normalized, ax=ax, cmap='Blues', cbar=True)
-            ax.set_xlabel('Predicted')
-            ax.set_ylabel('True')
-            ax.set_title(f'Confusion Matrix - Epoch {self.current_epoch}')
-            fig.tight_layout()
-
-            tb = self.logger.experiment
-            tb.add_figure("val/confusion_matrix", fig, self.global_step)
-            tb.flush()
-            plt.close(fig)
-
-        # Clear accumulated predictions
-        self.val_preds.clear()
-        self.val_labels.clear()
-
-    def _log_top_confused_pairs(self, cm, all_labels, all_preds, top_k=20):
-        """Log top confused class pairs for large datasets like ImageNet."""
-        # Find top confused pairs (off-diagonal elements)
-        cm_no_diag = cm.copy()
-        np.fill_diagonal(cm_no_diag, 0)
-
-        # Get indices of top confused pairs
-        flat_indices = np.argsort(cm_no_diag.ravel())[-top_k:][::-1]
-        top_pairs = [(idx // cm.shape[1], idx % cm.shape[1]) for idx in flat_indices]
-
-        # Create bar chart of top confused pairs
-        fig, ax = plt.subplots(figsize=(12, 8))
-        pair_labels = [f"{true}->{pred}" for true, pred in top_pairs]
-        pair_counts = [cm[true, pred] for true, pred in top_pairs]
-
-        bars = ax.barh(range(len(pair_labels)), pair_counts, color='steelblue')
-        ax.set_yticks(range(len(pair_labels)))
-        ax.set_yticklabels(pair_labels)
-        ax.set_xlabel('Count')
-        ax.set_title(f'Top {top_k} Confused Class Pairs - Epoch {self.current_epoch}')
-        ax.invert_yaxis()
-
-        # Add count labels on bars
-        for bar, count in zip(bars, pair_counts):
-            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
-                    str(count), va='center', fontsize=9)
-
-        fig.tight_layout()
-
-        tb = self.logger.experiment
-        tb.add_figure("val/top_confused_pairs", fig, self.global_step)
-        tb.flush()
-        plt.close(fig)
 
     def _log_images(self, images, labels, outputs):
         n = min(images.shape[0], 8)
@@ -411,7 +327,7 @@ class CliffordNetLightning(L.LightningModule):
         fig.tight_layout()
 
         tb = self.logger.experiment
-        tb.add_figure("val/sample_predictions", fig, self.global_step)
+        tb.add_figure("val/sample_predictions", fig, self.current_epoch)
         tb.flush()
         plt.close(fig)
 
@@ -434,16 +350,18 @@ class CliffordNetLightning(L.LightningModule):
             return res
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
+        optimizer = torch.optim.Muon(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
-            T_0=10,        # 第一個 cycle 的 epoch 數
-            T_mult=2,      # 每次 cycle 長度翻倍
-            eta_min=1e-6,
+            max_lr=self.hparams.learning_rate,
+            total_steps=self.trainer.estimated_stepping_batches,
+            pct_start=self.hparams.warmup_epochs / self.hparams.max_epochs,
+            div_factor=25,
+            final_div_factor=1e4,
         )
         return {
             "optimizer": optimizer,
@@ -549,12 +467,12 @@ def main():
                         help="Number of GPUs to use")
     parser.add_argument("--weight-decay", type=float, default=0.05,
                         help="Weight decay")
-    parser.add_argument("--warmup-epochs", type=int, default=1,
+    parser.add_argument("--warmup-epochs", type=int, default=5,
                         help="Number of warmup epochs")
     parser.add_argument("--num-workers", type=int, default=8,
                         help="Number of data loading workers per GPU")
-    parser.add_argument("--gradient-clip-val", type=float, default=1.0,
-                        help="Gradient clipping value (default: 1.0 for stability)")
+    parser.add_argument("--gradient-clip-val", type=float, default=0.5,
+                        help="Gradient clipping value (default: 0.5 for stability)")
     parser.add_argument("--output-dir", type=str, default="./outputs",
                         help="Output directory for checkpoints and logs")
     parser.add_argument("--resume", type=str, default=None,
