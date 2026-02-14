@@ -196,6 +196,7 @@ def cliffordnet_nano(num_classes=1000):
 
 def cliffordnet_small(num_classes=1000):
     return CliffordNet(
+        img_size=224,
         embed_dim=192,
         depth=12,
         shifts=[1, 2, 4, 8],
@@ -442,8 +443,8 @@ class CliffordNetLightning(L.LightningModule):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer,
             T_0=10,        # 第一個 cycle 的 epoch 數
-            T_mult=2,      # 每次 cycle 長度翻倍
-            eta_min=1e-6,
+            T_mult=4,      # 每次 cycle 長度翻倍
+            eta_min=5e-6,
         )
         return {
             "optimizer": optimizer,
@@ -541,7 +542,7 @@ def main():
                         help="Model size variant")
     parser.add_argument("--batch-size", type=int, default=24,
                         help="Batch size per GPU")
-    parser.add_argument("--epochs", type=int, default=90,
+    parser.add_argument("--epochs", type=int, default=999,
                         help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=5e-4,
                         help="Learning rate (default: 5e-4 for stability)")
@@ -562,20 +563,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Scale learning rate based on effective batch size
-    base_batch_size = 80  # Reference batch size for base LR
-    effective_batch_size = args.batch_size * args.num_gpus
-    lr_scale = effective_batch_size / base_batch_size
-    scaled_lr = args.lr * lr_scale
-
-    if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-        print(
-            f"Starting training with Base LR={args.lr}, Scaled LR={scaled_lr:.6f}")
-        print(
-            f"Effective Batch Size: {effective_batch_size} (BS={args.batch_size} × GPUs={args.num_gpus})")
-        print(f"LR Scale Factor: {lr_scale:.3f}")
-        print(f"Model Size: {args.model_size}")
-
     L.seed_everything(42)
     torch.set_float32_matmul_precision('high')
     torch.backends.cudnn.benchmark = True
@@ -590,7 +577,7 @@ def main():
     model = CliffordNetLightning(
         model_size=args.model_size,
         num_classes=1000,
-        learning_rate=scaled_lr,
+        learning_rate=args.lr,
         weight_decay=args.weight_decay,
         warmup_epochs=args.warmup_epochs,
         max_epochs=args.epochs,
