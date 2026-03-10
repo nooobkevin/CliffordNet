@@ -350,7 +350,7 @@ class CliffordNetLightning(L.LightningModule):
             return res
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Muon(
+        optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay,
@@ -390,6 +390,29 @@ class HFImageNetDataset(torch.utils.data.Dataset):
         return image, item["label"]
 
 
+class SingleImageDataset(torch.utils.data.Dataset):
+    """Dataset that returns the same single image for overfitting tests."""
+    def __init__(self, hf_dataset, transform=None, num_samples=1000, image_idx=0):
+        self.dataset = hf_dataset
+        self.transform = transform
+        self.num_samples = num_samples
+        self.image_idx = image_idx
+        # Cache the single image and label
+        item = self.dataset[self.image_idx]
+        self.image = item["image"].convert("RGB")
+        self.label = item["label"]
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        # Always return the same image (apply transform each time for augmentation variation)
+        image = self.image
+        if self.transform:
+            image = self.transform(image)
+        return image, self.label
+
+
 class ImageNet1kDataModule(L.LightningDataModule):
     def __init__(self, data_dir, batch_size, num_workers):
         super().__init__()
@@ -398,11 +421,11 @@ class ImageNet1kDataModule(L.LightningDataModule):
         self.num_workers = num_workers
 
     def setup(self, stage=None):
+        # No augmentation for overfitting test - use same transform for train and val
         train_tf = transforms.Compose(
             [
-                transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(0.4, 0.4, 0.4),
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
                 transforms.ToTensor(),
                 transforms.Normalize(IMAGENET_DEFAULT_MEAN,
                                      IMAGENET_DEFAULT_STD),
@@ -421,8 +444,9 @@ class ImageNet1kDataModule(L.LightningDataModule):
         ds = load_dataset(
             "ILSVRC/imagenet-1k", cache_dir=self.data_dir
         )
-        self.train_ds = HFImageNetDataset(ds["train"], transform=train_tf)
-        self.val_ds = HFImageNetDataset(ds["validation"], transform=val_tf)
+        # Use SingleImageDataset for overfitting test
+        self.train_ds = SingleImageDataset(ds["train"], transform=train_tf, num_samples=1000, image_idx=0)
+        self.val_ds = SingleImageDataset(ds["train"], transform=val_tf, num_samples=100, image_idx=0)
 
     def train_dataloader(self):
         return DataLoader(

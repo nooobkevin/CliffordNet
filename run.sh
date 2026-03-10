@@ -1,19 +1,22 @@
 #!/bin/bash
 #SBATCH -A itsc
 #SBATCH -p admin
-#SBATCH --gpus-per-node=4090d:6
-#SBATCH -c 64
-#SBATCH --mem 480G
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=6
+#SBATCH --gpus-per-task=rtx5880:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem-per-gpu=80G
 #SBATCH --time 04:00:00
-#SBATCH -w gpu41
+#SBATCH -w gpu40,gpu36
 
-# uv run python train_imagenet1k.py \
-#   --data-dir ./imagenet1k \
-#   --model-size nano \
-#   --batch-size 48 \
-#   --num-gpus 6 \
-#   --lr 5e-4 \
-#   --gradient-clip-val 1.0
-
-uv run python train_imagenet1k.py   --data-dir ./imagenet1k   --model-size nano   --batch-size 128  --num-gpus 6   --lr 5e-5   --gradient-clip-val 1.0 
-#--resume outputs/checkpoints/last-v8.ck
+# LR before scaled by batch size and number of nodes
+srun uv run python train_imagenet1k.py \
+  --data-dir ./imagenet1k \
+  --model-size small \
+  --batch-size 128 \
+  --num-nodes 2 \
+  --num-gpus 6 \
+  --lr 3e-4 \
+  --prefetch-local \
+  --output-dir ./outputs \
+  --gradient-clip-val 1.0

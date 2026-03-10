@@ -27,22 +27,20 @@ import argparse
 # CliffordNet Model Components (CIFAR-100 version - 32x32 input)
 # ============================================================================
 
-class CliffordInteraction(nn.Module):
 
+class CliffordInteraction(nn.Module):
     def __init__(self, dim, shifts=[1, 2]):
         super().__init__()
         self.dim = dim
         self.shifts = shifts
 
         self.ctx_conv = nn.Sequential(
-            nn.Conv2d(dim, dim, kernel_size=3,
-                      padding=1, groups=dim, bias=False),
+            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
             nn.BatchNorm2d(dim),
             nn.SiLU(),
-            nn.Conv2d(dim, dim, kernel_size=3,
-                      padding=1, groups=dim, bias=False),
+            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
             nn.BatchNorm2d(dim),
-            nn.SiLU()
+            nn.SiLU(),
         )
 
         self.det_proj = nn.Conv2d(dim, dim, kernel_size=1)
@@ -80,17 +78,16 @@ class CliffordInteraction(nn.Module):
 
 
 class CliffordBlock(nn.Module):
-
-    def __init__(self, dim, shifts, drop_path=0., layer_scale_init_value=1e-6):
+    def __init__(self, dim, shifts, drop_path=0.0, layer_scale_init_value=1e-6):
         super().__init__()
 
         self.norm = nn.GroupNorm(1, dim)
         self.interaction = CliffordInteraction(dim, shifts=shifts)
         self.gate_linear = nn.Conv2d(dim * 2, dim, kernel_size=1)
         self.gamma = nn.Parameter(
-            layer_scale_init_value * torch.ones((1, dim, 1, 1)), requires_grad=True)
-        self.drop_path = DropPath(
-            drop_path) if drop_path > 0. else nn.Identity()
+            layer_scale_init_value * torch.ones((1, dim, 1, 1)), requires_grad=True
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
         shortcut = x
@@ -106,35 +103,35 @@ class CliffordBlock(nn.Module):
 class CliffordNetCIFAR(nn.Module):
     """CliffordNet for CIFAR-100 (32x32 images)"""
 
-    def __init__(self,
-                 img_size=32,
-                 in_chans=3,
-                 num_classes=100,
-                 embed_dim=128,
-                 depth=12,
-                 shifts=[1, 2],
-                 drop_path_rate=0.1):
+    def __init__(
+        self,
+        img_size=32,
+        in_chans=3,
+        num_classes=100,
+        embed_dim=128,
+        depth=12,
+        shifts=[1, 2],
+        drop_path_rate=0.1,
+    ):
         super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim
 
         # Stem: Simple embedding for 32x32 images (no downsampling)
         self.stem = nn.Sequential(
-            nn.Conv2d(in_chans, embed_dim, kernel_size=3,
-                      padding=1, bias=False),
+            nn.Conv2d(in_chans, embed_dim, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(embed_dim),
-            nn.SiLU()
+            nn.SiLU(),
         )
 
         # Backbone: Stack of Clifford Blocks
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
-        self.blocks = nn.ModuleList([
-            CliffordBlock(
-                dim=embed_dim,
-                shifts=shifts,
-                drop_path=dpr[i]
-            ) for i in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                CliffordBlock(dim=embed_dim, shifts=shifts, drop_path=dpr[i])
+                for i in range(depth)
+            ]
+        )
 
         # Head
         self.norm = nn.GroupNorm(1, embed_dim)
@@ -144,7 +141,7 @@ class CliffordNetCIFAR(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv2d, nn.Linear)):
-            trunc_normal_(m.weight, std=.02)
+            trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
@@ -162,6 +159,7 @@ class CliffordNetCIFAR(nn.Module):
 # Model Configurations for CIFAR-100
 # ============================================================================
 
+
 def cliffordnet_nano_cifar(num_classes=100):
     """Nano model for CIFAR-100 (~1.4M params)"""
     return CliffordNetCIFAR(
@@ -170,7 +168,7 @@ def cliffordnet_nano_cifar(num_classes=100):
         depth=12,
         shifts=[1, 2],
         num_classes=num_classes,
-        drop_path_rate=0.05
+        drop_path_rate=0.05,
     )
 
 
@@ -182,7 +180,7 @@ def cliffordnet_small_cifar(num_classes=100):
         depth=12,
         shifts=[1, 2, 4, 8, 15],
         num_classes=num_classes,
-        drop_path_rate=0.1
+        drop_path_rate=0.1,
     )
 
 
@@ -194,13 +192,14 @@ def cliffordnet_base_cifar(num_classes=100):
         depth=16,
         shifts=[1, 2, 4, 8],
         num_classes=num_classes,
-        drop_path_rate=0.15
+        drop_path_rate=0.15,
     )
 
 
 # ============================================================================
 # Lightning Module
 # ============================================================================
+
 
 class CliffordNetLightning(L.LightningModule):
     def __init__(
@@ -318,32 +317,32 @@ class CIFAR100DataModule(L.LightningDataModule):
     def prepare_data(self):
         """Download data (called only on rank 0)"""
         torchvision.datasets.CIFAR100(
-            root=str(self.data_dir),
-            train=True,
-            download=True
+            root=str(self.data_dir), train=True, download=True
         )
         torchvision.datasets.CIFAR100(
-            root=str(self.data_dir),
-            train=False,
-            download=True
+            root=str(self.data_dir), train=False, download=True
         )
 
     def setup(self, stage=None):
         # Training transforms with augmentation
-        self.train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.TrivialAugmentWide(),
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
-            transforms.RandomErasing(p=0.1),
-        ])
+        self.train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.TrivialAugmentWide(),
+                transforms.ToTensor(),
+                transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
+                transforms.RandomErasing(p=0.1),
+            ]
+        )
 
         # Validation transforms
-        self.val_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
-        ])
+        self.val_transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD),
+            ]
+        )
 
         if stage == "fit" or stage is None:
             self.train_dataset = torchvision.datasets.CIFAR100(
@@ -388,6 +387,7 @@ class CIFAR100DataModule(L.LightningDataModule):
 # DDP Configuration (simpler and more stable for small models)
 # ============================================================================
 
+
 def get_strategy(num_gpus):
     """Use DDP for multi-GPU training - simpler and supports gradient clipping"""
     if num_gpus > 1:
@@ -399,41 +399,76 @@ def get_strategy(num_gpus):
 # Main Training Function
 # ============================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Train CliffordNet on CIFAR-100")
-    parser.add_argument("--data-dir", type=str, default="./data",
-                        help="Path to CIFAR-100 dataset (auto-downloads)")
-    parser.add_argument("--model-size", type=str, default="nano",
-                        choices=["nano", "small", "base"],
-                        help="Model size variant")
-    parser.add_argument("--batch-size", type=int, default=128,
-                        help="Batch size per GPU")
-    parser.add_argument("--epochs", type=int, default=200,
-                        help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=None,
-                        help="Learning rate (default: auto-scaled based on batch size)")
-    parser.add_argument("--base-lr", type=float, default=1e-3,
-                        help="Base learning rate for batch size 128")
-    parser.add_argument("--weight-decay", type=float, default=0.05,
-                        help="Weight decay")
-    parser.add_argument("--warmup-epochs", type=int, default=5,
-                        help="Number of warmup epochs")
-    parser.add_argument("--num-workers", type=int, default=4,
-                        help="Number of data loading workers per GPU")
-    parser.add_argument("--accumulate-grad-batches", type=int, default=1,
-                        help="Gradient accumulation steps")
-    parser.add_argument("--precision", type=str, default="bf16-mixed",
-                        choices=["32", "16-mixed", "bf16-mixed"],
-                        help="Training precision")
-    parser.add_argument("--gradient-clip-val", type=float, default=1.0,
-                        help="Gradient clipping value")
-    parser.add_argument("--output-dir", type=str, default="./outputs_cifar100",
-                        help="Output directory for checkpoints and logs")
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Path to checkpoint to resume from")
-    parser.add_argument("--num-gpus", type=int, default=6,
-                        help="Number of GPUs to use")
+    parser = argparse.ArgumentParser(description="Train CliffordNet on CIFAR-100")
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="./data",
+        help="Path to CIFAR-100 dataset (auto-downloads)",
+    )
+    parser.add_argument(
+        "--model-size",
+        type=str,
+        default="nano",
+        choices=["nano", "small", "base"],
+        help="Model size variant",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=128, help="Batch size per GPU"
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=200, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Learning rate (default: auto-scaled based on batch size)",
+    )
+    parser.add_argument(
+        "--base-lr",
+        type=float,
+        default=1e-3,
+        help="Base learning rate for batch size 128",
+    )
+    parser.add_argument("--weight-decay", type=float, default=0.05, help="Weight decay")
+    parser.add_argument(
+        "--warmup-epochs", type=int, default=5, help="Number of warmup epochs"
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Number of data loading workers per GPU",
+    )
+    parser.add_argument(
+        "--accumulate-grad-batches",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16-mixed",
+        choices=["32", "16-mixed", "bf16-mixed"],
+        help="Training precision",
+    )
+    parser.add_argument(
+        "--gradient-clip-val", type=float, default=1.0, help="Gradient clipping value"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./outputs_cifar100",
+        help="Output directory for checkpoints and logs",
+    )
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Path to checkpoint to resume from"
+    )
+    parser.add_argument("--num-gpus", type=int, default=6, help="Number of GPUs to use")
 
     args = parser.parse_args()
 
@@ -453,8 +488,7 @@ def main():
     print(f"Batch size per GPU: {args.batch_size}")
     print(f"Effective batch size: {effective_batch_size}")
     print(f"Epochs: {args.epochs}")
-    print(
-        f"Learning rate: {args.lr} (auto-scaled from base_lr={args.base_lr})")
+    print(f"Learning rate: {args.lr} (auto-scaled from base_lr={args.base_lr})")
     print(f"Precision: {args.precision}")
     print(f"Data directory: {args.data_dir}")
     print(f"Number of GPUs: {args.num_gpus}")
@@ -482,8 +516,7 @@ def main():
 
     # Print model info
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel()
-                           for p in model.parameters() if p.requires_grad)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
     print("=" * 60)

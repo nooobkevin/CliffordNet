@@ -1,6 +1,28 @@
 """
-CliffordNet Training Script for ImageNet-1k with PyTorch Lightning
-Optimized for Stability on 6x 4090D GPUs
+CliffordNet Multi-Node DDP Training Script for ImageNet-1k
+PyTorch Lightning — NFS data with optional local SSD prefetch (/tmp/$UID)
+
+Launch examples:
+
+  # ── torchrun (2 nodes × 6 GPUs each) ──────────────────────────────
+  # On node 0 (master):
+  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=0 \
+           --master_addr=NODE0_IP --master_port=29500 \
+           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
+                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
+
+  # On node 1:
+  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=1 \
+           --master_addr=NODE0_IP --master_port=29500 \
+           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
+                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
+
+  # ── SLURM ─────────────────────────────────────────────────────────
+  #SBATCH --nodes=2
+  #SBATCH --ntasks-per-node=6
+  #SBATCH --gpus-per-node=6
+  srun python train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
+       --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
 """
 
 from datasets import load_dataset
@@ -15,10 +37,12 @@ from lightning.pytorch.callbacks import (
 import lightning as L
 import matplotlib.pyplot as plt
 import os
+import subprocess
 import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 import matplotlib
@@ -26,6 +50,39 @@ matplotlib.use('Agg')
 import numpy as np
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
+
+
+# ============================================================================
+# NFS → Local SSD Prefetch
+# ============================================================================
+
+def prefetch_nfs_to_local(nfs_dir, local_dir):
+    """
+    Copy HuggingFace dataset cache from NFS to node-local SSD.
+    Marker file prevents redundant copies on restart.
+    Called only by local-rank-0 on each node (via prepare_data).
+    """
+    marker = os.path.join(local_dir, ".prefetch_complete")
+    if os.path.exists(marker):
+        print(f"[Prefetch] Local cache already present at {local_dir}")
+        return
+
+    os.makedirs(local_dir, exist_ok=True)
+    print(f"[Prefetch] Copying {nfs_dir} → {local_dir}  (may take a while) ...")
+
+    ret = subprocess.run(
+        ["rsync", "-a", "--info=progress2", f"{nfs_dir}/", f"{local_dir}/"]
+    )
+    if ret.returncode != 0:
+        print("[Prefetch] rsync unavailable or failed, falling back to cp -a")
+        subprocess.run(
+            ["cp", "-a", f"{nfs_dir}/.", f"{local_dir}/"], check=True
+        )
+
+    with open(marker, "w") as f:
+        f.write("done\n")
+    print("[Prefetch] Complete.")
+
 
 # ============================================================================
 # CliffordNet Model Components
@@ -57,7 +114,6 @@ class CliffordInteraction(nn.Module):
         input_proj_dim = 2 * len(shifts) * dim
         self.final_proj = nn.Conv2d(input_proj_dim, dim, kernel_size=1)
 
-        # 預算所有 shift 的 channel 索引: (S, C)
         base = torch.arange(dim)
         roll_idx = torch.stack([(base - s) % dim for s in shifts], dim=0)
         self.register_buffer('_roll_idx', roll_idx)
@@ -70,24 +126,19 @@ class CliffordInteraction(nn.Module):
         z_det = self.norm_det(z_det)
 
         B, C, H, W = z_det.shape
-        S = len(self.shifts)
 
-        # 用 advanced indexing 一次完成所有 shift 的 roll
-        # (B, C, H, W) -> (B, S, C, H, W)
         z_det_rolled = z_det[:, self._roll_idx]
         z_ctx_rolled = z_ctx[:, self._roll_idx]
 
-        # 廣播原始張量: (B, 1, C, H, W)
         z_det_b = z_det.unsqueeze(1)
         z_ctx_b = z_ctx.unsqueeze(1)
 
-        # 所有 shift 並行計算
-        prod = z_det_b * z_ctx_rolled                       # (B, S, C, H, W)
-        dot = F.silu(prod)                                # (B, S, C, H, W)
-        wedge = (prod - z_det_rolled * z_ctx_b).to(x.dtype)  # (B, S, C, H, W)
+        prod = z_det_b * z_ctx_rolled
+        dot = F.silu(prod)
+        wedge = (prod - z_det_rolled * z_ctx_b).to(x.dtype)
 
-        # 交錯排列 [dot_s0, wedge_s0, dot_s1, wedge_s1, ...]
-        pairs = torch.stack([dot, wedge], dim=2)  # (B, S, 2, C, H, W)
+        pairs = torch.stack([dot, wedge], dim=2)
+        S = len(self.shifts)
         g_raw = pairs.reshape(B, S * 2 * C, H, W)
 
         g_feat = self.final_proj(g_raw)
@@ -227,7 +278,7 @@ def cliffordnet_large(num_classes=1000):
     )
 
 # ============================================================================
-# Lightning Module (TensorBoard logging fixed)
+# Lightning Module
 # ============================================================================
 
 
@@ -236,9 +287,8 @@ class CliffordNetLightning(L.LightningModule):
         self,
         model_size="small",
         num_classes=1000,
-        learning_rate=5e-4,
+        learning_rate=3e-4,
         weight_decay=0.05,
-        warmup_epochs=1,
         max_epochs=200,
     ):
         super().__init__()
@@ -252,8 +302,7 @@ class CliffordNetLightning(L.LightningModule):
         }
         self.model = model_builders[model_size](num_classes=num_classes)
         self.model = self.model.to(memory_format=torch.channels_last)
-        self.model = torch.compile(
-            self.model)
+        self.model = torch.compile(self.model)
 
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
@@ -264,13 +313,11 @@ class CliffordNetLightning(L.LightningModule):
             "inv_std", torch.tensor(IMAGENET_DEFAULT_STD).view(1, 3, 1, 1)
         )
 
-        # For confusion matrix accumulation
         self.val_preds = []
         self.val_labels = []
 
     def forward(self, x):
         return self.model(x.contiguous(memory_format=torch.channels_last))
-        # return self.model(x)
 
     def training_step(self, batch, batch_idx):
         images, labels = batch
@@ -295,81 +342,100 @@ class CliffordNetLightning(L.LightningModule):
         self.log("val/acc1", acc1, prog_bar=True, sync_dist=True)
         self.log("val/acc5", acc5, prog_bar=True, sync_dist=True)
 
-        # Accumulate predictions for confusion matrix
         preds = outputs.argmax(dim=1)
         self.val_preds.append(preds.cpu())
         self.val_labels.append(labels.cpu())
 
-        # Image/text visualization: only rank 0, only first batch
         if batch_idx == 0 and self.trainer.is_global_zero:
             self._log_images(images, labels, outputs)
 
         return loss
 
     def on_validation_epoch_end(self):
-        if not self.trainer.is_global_zero:
-            self.val_preds.clear()
-            self.val_labels.clear()
-            return
+        # ------------------------------------------------------------------
+        # 每個 rank 各自只看到 DistributedSampler 分配的子集，
+        # 先算局部混淆矩陣，再 all_reduce 加總得到全局結果。
+        # 注意：所有 rank 都必須參與 all_reduce，否則會 deadlock。
+        # ------------------------------------------------------------------
+        num_cls = self.hparams.num_classes
 
-        all_preds = torch.cat(self.val_preds).numpy()
-        all_labels = torch.cat(self.val_labels).numpy()
-
-        # Compute confusion matrix
-        cm = confusion_matrix(all_labels, all_preds, labels=range(self.model.num_classes))
-
-        # Normalize confusion matrix
-        cm_normalized = cm.astype('float') / (cm.sum(axis=1, keepdims=True) + 1e-8)
-
-        # Create figure - for 1000 classes, use a smaller figure with aggregated view
-        num_classes = self.model.num_classes
-        if num_classes > 100:
-            # For large class counts, show top-k confused pairs instead
-            self._log_top_confused_pairs(cm, all_labels, all_preds)
+        if len(self.val_preds) > 0:
+            all_preds = torch.cat(self.val_preds).numpy()
+            all_labels = torch.cat(self.val_labels).numpy()
+            cm_local = confusion_matrix(
+                all_labels, all_preds, labels=range(num_cls)
+            )
         else:
-            # For smaller class counts, show full confusion matrix
-            fig, ax = plt.subplots(figsize=(12, 10))
-            sns.heatmap(cm_normalized, ax=ax, cmap='Blues', cbar=True)
-            ax.set_xlabel('Predicted')
-            ax.set_ylabel('True')
-            ax.set_title(f'Confusion Matrix - Epoch {self.current_epoch}')
-            fig.tight_layout()
+            cm_local = np.zeros((num_cls, num_cls), dtype=np.int64)
 
-            tb = self.logger.experiment
-            tb.add_figure("val/confusion_matrix", fig, self.global_step)
-            tb.flush()
-            plt.close(fig)
+        cm_tensor = torch.tensor(cm_local, dtype=torch.int64, device=self.device)
 
-        # Clear accumulated predictions
+        # 跨所有 rank 加總
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            dist.all_reduce(cm_tensor, op=dist.ReduceOp.SUM)
+
+        # 只有 global rank 0 負責繪圖 / 記錄
+        if self.trainer.is_global_zero:
+            cm = cm_tensor.cpu().numpy()
+            cm_normalized = cm.astype("float") / (
+                cm.sum(axis=1, keepdims=True) + 1e-8
+            )
+
+            if num_cls > 100:
+                self._log_top_confused_pairs(cm, top_k=20)
+            else:
+                fig, ax = plt.subplots(figsize=(12, 10))
+                sns.heatmap(cm_normalized, ax=ax, cmap="Blues", cbar=True)
+                ax.set_xlabel("Predicted")
+                ax.set_ylabel("True")
+                ax.set_title(
+                    f"Confusion Matrix — Epoch {self.current_epoch}"
+                )
+                fig.tight_layout()
+
+                tb = self.logger.experiment
+                tb.add_figure(
+                    "val/confusion_matrix", fig, self.global_step
+                )
+                tb.flush()
+                plt.close(fig)
+
         self.val_preds.clear()
         self.val_labels.clear()
 
-    def _log_top_confused_pairs(self, cm, all_labels, all_preds, top_k=20):
+    def _log_top_confused_pairs(self, cm, top_k=20):
         """Log top confused class pairs for large datasets like ImageNet."""
-        # Find top confused pairs (off-diagonal elements)
         cm_no_diag = cm.copy()
         np.fill_diagonal(cm_no_diag, 0)
 
-        # Get indices of top confused pairs
         flat_indices = np.argsort(cm_no_diag.ravel())[-top_k:][::-1]
-        top_pairs = [(idx // cm.shape[1], idx % cm.shape[1]) for idx in flat_indices]
+        top_pairs = [
+            (idx // cm.shape[1], idx % cm.shape[1]) for idx in flat_indices
+        ]
 
-        # Create bar chart of top confused pairs
         fig, ax = plt.subplots(figsize=(12, 8))
-        pair_labels = [f"{true}->{pred}" for true, pred in top_pairs]
+        pair_labels = [f"{true}→{pred}" for true, pred in top_pairs]
         pair_counts = [cm[true, pred] for true, pred in top_pairs]
 
-        bars = ax.barh(range(len(pair_labels)), pair_counts, color='steelblue')
+        bars = ax.barh(
+            range(len(pair_labels)), pair_counts, color="steelblue"
+        )
         ax.set_yticks(range(len(pair_labels)))
         ax.set_yticklabels(pair_labels)
-        ax.set_xlabel('Count')
-        ax.set_title(f'Top {top_k} Confused Class Pairs - Epoch {self.current_epoch}')
+        ax.set_xlabel("Count")
+        ax.set_title(
+            f"Top {top_k} Confused Class Pairs — Epoch {self.current_epoch}"
+        )
         ax.invert_yaxis()
 
-        # Add count labels on bars
         for bar, count in zip(bars, pair_counts):
-            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
-                    str(count), va='center', fontsize=9)
+            ax.text(
+                bar.get_width() + 0.5,
+                bar.get_y() + bar.get_height() / 2,
+                str(count),
+                va="center",
+                fontsize=9,
+            )
 
         fig.tight_layout()
 
@@ -384,14 +450,14 @@ class CliffordNetLightning(L.LightningModule):
         lbls = labels[:n]
         preds = outputs[:n].argmax(dim=1)
 
-        # Denormalize
         imgs = imgs * self.inv_std + self.inv_mean
         imgs = torch.clamp(imgs, 0, 1)
 
         ncols = 4
         nrows = (n + ncols - 1) // ncols
         fig, axes = plt.subplots(
-            nrows, ncols, figsize=(3 * ncols, 3.5 * nrows))
+            nrows, ncols, figsize=(3 * ncols, 3.5 * nrows)
+        )
         if nrows == 1:
             axes = [axes] if ncols == 1 else list(axes)
         else:
@@ -405,8 +471,12 @@ class CliffordNetLightning(L.LightningModule):
                 ax.imshow(img_np)
                 gt, pd = lbls[i].item(), preds[i].item()
                 color = "green" if gt == pd else "red"
-                ax.set_title(f"GT:{gt} / P:{pd}", fontsize=11,
-                             color=color, fontweight="bold")
+                ax.set_title(
+                    f"GT:{gt} / P:{pd}",
+                    fontsize=11,
+                    color=color,
+                    fontweight="bold",
+                )
 
         fig.suptitle(f"Epoch {self.current_epoch}", fontsize=14)
         fig.tight_layout()
@@ -417,11 +487,6 @@ class CliffordNetLightning(L.LightningModule):
         plt.close(fig)
 
     def _accuracy(self, output, target, topk=(1,)):
-        """
-        Computes top-k accuracy as a fraction in [0, 1].
-        FIX: returns 0-D scalar tensors instead of shape-[1] tensors,
-        which is what self.log() expects.
-        """
         with torch.no_grad():
             maxk = max(topk)
             batch_size = target.size(0)
@@ -442,9 +507,9 @@ class CliffordNetLightning(L.LightningModule):
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer,
-            T_0=10,        # 第一個 cycle 的 epoch 數
-            T_mult=4,      # 每次 cycle 長度翻倍
-            eta_min=5e-6,
+            T_0=10,
+            T_mult=4,
+            eta_min=1e-6,
         )
         return {
             "optimizer": optimizer,
@@ -453,7 +518,7 @@ class CliffordNetLightning(L.LightningModule):
 
 
 # ============================================================================
-# Data Module
+# Data Module — NFS + optional local SSD prefetch
 # ============================================================================
 
 
@@ -474,21 +539,54 @@ class HFImageNetDataset(torch.utils.data.Dataset):
 
 
 class ImageNet1kDataModule(L.LightningDataModule):
-    def __init__(self, data_dir, batch_size, num_workers):
+    def __init__(
+        self,
+        nfs_data_dir,
+        batch_size,
+        num_workers,
+        prefetch_local=False,
+        local_cache_dir=None,
+    ):
         super().__init__()
-        self.data_dir = data_dir
+        self.nfs_data_dir = nfs_data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.prefetch_local = prefetch_local
+        self.local_cache_dir = local_cache_dir or os.path.join(
+            "/tmp", str(os.getuid()), "imagenet1k_cache"
+        )
+        # 讓 prepare_data 在每個節點的 local rank 0 各跑一次
+        self.prepare_data_per_node = True
+
+    def prepare_data(self):
+        """
+        在每個節點的 local rank 0 上執行。
+        1) 確認 NFS 上已有 HF dataset cache（首次會下載）
+        2) 若 --prefetch-local，將 NFS cache 複製到 /tmp/$UID
+        """
+        load_dataset(
+            "ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir
+        )
+        if self.prefetch_local:
+            prefetch_nfs_to_local(self.nfs_data_dir, self.local_cache_dir)
 
     def setup(self, stage=None):
+        """
+        在所有 rank 上執行（Lightning 會在 prepare_data 完成後加 barrier）。
+        """
+        effective_dir = (
+            self.local_cache_dir if self.prefetch_local else self.nfs_data_dir
+        )
+
         train_tf = transforms.Compose(
             [
                 transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
                 transforms.RandomHorizontalFlip(),
                 transforms.ColorJitter(0.4, 0.4, 0.4),
                 transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN,
-                                     IMAGENET_DEFAULT_STD),
+                transforms.Normalize(
+                    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+                ),
             ]
         )
         val_tf = transforms.Compose(
@@ -496,13 +594,14 @@ class ImageNet1kDataModule(L.LightningDataModule):
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN,
-                                     IMAGENET_DEFAULT_STD),
+                transforms.Normalize(
+                    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+                ),
             ]
         )
 
         ds = load_dataset(
-            "ILSVRC/imagenet-1k", cache_dir=self.data_dir
+            "ILSVRC/imagenet-1k", cache_dir=effective_dir
         )
         self.train_ds = HFImageNetDataset(ds["train"], transform=train_tf)
         self.val_ds = HFImageNetDataset(ds["validation"], transform=val_tf)
@@ -511,10 +610,12 @@ class ImageNet1kDataModule(L.LightningDataModule):
         return DataLoader(
             self.train_ds,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=True,  # Lightning 在 DDP 下自動替換為 DistributedSampler
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=True,
+            persistent_workers=self.num_workers > 0,
+            prefetch_factor=4 if self.num_workers > 0 else None,
         )
 
     def val_dataloader(self):
@@ -524,6 +625,8 @@ class ImageNet1kDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=True,
+            persistent_workers=self.num_workers > 0,
+            prefetch_factor=4 if self.num_workers > 0 else None,
         )
 
 
@@ -534,44 +637,90 @@ class ImageNet1kDataModule(L.LightningDataModule):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train CliffordNet on ImageNet-1k")
-    parser.add_argument("--data-dir", type=str, default="./imagenet1k",
-                        help="Path to cache ImageNet-1k dataset")
-    parser.add_argument("--model-size", type=str, default="small",
-                        choices=["nano", "small", "base", "large"],
-                        help="Model size variant")
-    parser.add_argument("--batch-size", type=int, default=24,
-                        help="Batch size per GPU")
-    parser.add_argument("--epochs", type=int, default=999,
-                        help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=5e-4,
-                        help="Learning rate (default: 5e-4 for stability)")
-    parser.add_argument("--num-gpus", type=int, default=1,
-                        help="Number of GPUs to use")
-    parser.add_argument("--weight-decay", type=float, default=0.05,
-                        help="Weight decay")
-    parser.add_argument("--warmup-epochs", type=int, default=1,
-                        help="Number of warmup epochs")
-    parser.add_argument("--num-workers", type=int, default=8,
-                        help="Number of data loading workers per GPU")
-    parser.add_argument("--gradient-clip-val", type=float, default=1.0,
-                        help="Gradient clipping value (default: 1.0 for stability)")
-    parser.add_argument("--output-dir", type=str, default="./outputs",
-                        help="Output directory for checkpoints and logs")
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Path to checkpoint to resume from")
+        description="Train CliffordNet on ImageNet-1k (multi-node DDP)"
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="./imagenet1k",
+        help="NFS path where HuggingFace caches ImageNet-1k",
+    )
+    parser.add_argument(
+        "--model-size",
+        type=str,
+        default="small",
+        choices=["nano", "small", "base", "large"],
+        help="Model size variant",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=24,
+        help="Batch size per GPU",
+    )
+    parser.add_argument("--epochs", type=int, default=999)
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=5e-4,
+        help="Base learning rate (consider linear scaling with world size)",
+    )
+    parser.add_argument(
+        "--num-gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs per node",
+    )
+    parser.add_argument(
+        "--num-nodes",
+        type=int,
+        default=1,
+        help="Number of nodes",
+    )
+    parser.add_argument("--weight-decay", type=float, default=0.05)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=8,
+        help="DataLoader workers per GPU process",
+    )
+    parser.add_argument("--gradient-clip-val", type=float, default=1.0)
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./outputs",
+        help="Output dir for checkpoints/logs (should be on NFS for multi-node)",
+    )
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Checkpoint path to resume from"
+    )
+    # ---- Prefetch ----
+    parser.add_argument(
+        "--prefetch-local",
+        action="store_true",
+        help="Copy HF cache from NFS to /tmp/$UID before training",
+    )
+    parser.add_argument(
+        "--local-cache-dir",
+        type=str,
+        default=None,
+        help="Local SSD path for prefetch (default: /tmp/$UID/imagenet_cache)",
+    )
 
     args = parser.parse_args()
 
     L.seed_everything(42)
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
+
     data = ImageNet1kDataModule(
-        data_dir=args.data_dir,
+        nfs_data_dir=args.data_dir,
         batch_size=args.batch_size,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        prefetch_local=args.prefetch_local,
+        local_cache_dir=args.local_cache_dir,
     )
 
     model = CliffordNetLightning(
@@ -579,7 +728,6 @@ def main():
         num_classes=1000,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
-        warmup_epochs=args.warmup_epochs,
         max_epochs=args.epochs,
     )
 
@@ -594,21 +742,22 @@ def main():
     trainer = L.Trainer(
         accelerator="gpu",
         devices=args.num_gpus,
+        num_nodes=args.num_nodes,
         strategy="ddp",
         precision="bf16-mixed",
         max_epochs=args.epochs,
         gradient_clip_val=args.gradient_clip_val,
-        callbacks=[checkpoint_callback, LearningRateMonitor(
-            "step"), RichProgressBar()],
+        callbacks=[
+            checkpoint_callback,
+            LearningRateMonitor("step"),
+            RichProgressBar(),
+        ],
         logger=TensorBoardLogger(
-            args.output_dir, name="cliffordnet_imagenet1k"),
+            args.output_dir, name="cliffordnet_imagenet1k"
+        ),
         log_every_n_steps=10,
     )
-    # tuner = L.pytorch.tuner.Tuner(trainer)
-    # tuner.scale_batch_size(model, datamodule=data, mode="power",
-    #                        init_val=args.batch_size, max_trials=10,
-    #                        steps_per_trial=3)
-    # print(f"Optimal batch size: {data.batch_size}")
+
     trainer.fit(model, data, ckpt_path=args.resume)
 
 
