@@ -1,4 +1,5 @@
 outputs*/
+wandb/
 data
 imagenet1k
 slurm-*.out
