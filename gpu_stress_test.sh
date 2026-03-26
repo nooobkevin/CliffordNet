@@ -17,7 +17,7 @@ set -euo pipefail
 MAX_GPU=7                  # GPU index 0..MAX_GPU (inclusive), 0-7 = 8 GPUs
 MODEL_SIZE="small"
 BATCH_SIZE=0               # 0 = auto-detect
-EPOCHS=3                   # Just enough to stress test
+EPOCHS=300
 DATA_DIR="./imagenet1k"
 OUTPUT_BASE="./outputs_stress_test"
 NUM_WORKERS=4

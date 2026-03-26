@@ -73,14 +73,16 @@ def prefetch_nfs_to_local(nfs_dir, local_dir):
         return
 
     os.makedirs(local_dir, exist_ok=True)
-    print(f"[Prefetch] Copying {nfs_dir} → {local_dir}  (may take a while) ...")
+    print(
+        f"[Prefetch] Copying {nfs_dir} → {local_dir}  (may take a while) ...")
 
     ret = subprocess.run(
         ["rsync", "-a", "--info=progress2", f"{nfs_dir}/", f"{local_dir}/"]
     )
     if ret.returncode != 0:
         print("[Prefetch] rsync unavailable or failed, falling back to cp -a")
-        subprocess.run(["cp", "-a", f"{nfs_dir}/.", f"{local_dir}/"], check=True)
+        subprocess.run(
+            ["cp", "-a", f"{nfs_dir}/.", f"{local_dir}/"], check=True)
 
     with open(marker, "w") as f:
         f.write("done\n")
@@ -99,10 +101,12 @@ class CliffordInteraction(nn.Module):
         self.shifts = shifts
 
         self.ctx_conv = nn.Sequential(
-            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
+            nn.Conv2d(dim, dim, kernel_size=3,
+                      padding=1, groups=dim, bias=False),
             nn.GroupNorm(1, dim, eps=1e-6),
             nn.SiLU(),
-            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
+            nn.Conv2d(dim, dim, kernel_size=3,
+                      padding=1, groups=dim, bias=False),
             nn.GroupNorm(1, dim, eps=1e-6),
             nn.SiLU(),
         )
@@ -156,7 +160,8 @@ class CliffordBlock(nn.Module):
         self.gamma = nn.Parameter(
             layer_scale_init_value * torch.ones((1, dim, 1, 1)), requires_grad=True
         )
-        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+        self.drop_path = DropPath(
+            drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
         shortcut = x
@@ -358,6 +363,10 @@ class CliffordNetLightning(L.LightningModule):
         self.log("train/acc1", acc1, prog_bar=True, sync_dist=True)
         self.log("train/acc5", acc5, sync_dist=True)
 
+        # Log learning rate
+        opt = self.optimizers()
+        self.log("train/lr", opt.param_groups[0]["lr"], prog_bar=False)
+
         # Throughput logging
         if self._train_step_start is not None:
             elapsed = _time.monotonic() - self._train_step_start
@@ -370,8 +379,8 @@ class CliffordNetLightning(L.LightningModule):
 
         return loss
 
-    def on_before_zero_grad(self, optimizer):
-        """Update EMA weights after each optimizer step."""
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        """Update EMA weights after optimizer step completes (safe with torch.compile)."""
         self._update_ema()
 
     def _init_ema(self):
@@ -388,7 +397,12 @@ class CliffordNetLightning(L.LightningModule):
         d = self.ema_decay
         model_sd = self.model.state_dict()
         for k in self._ema_model:
-            self._ema_model[k].lerp_(model_sd[k].detach(), 1 - d)
+            v = model_sd[k].detach()
+            if v.is_floating_point():
+                self._ema_model[k].lerp_(v, 1 - d)
+            else:
+                # Non-float buffers (e.g. num_batches_tracked): just copy
+                self._ema_model[k].copy_(v)
 
     def _swap_ema(self):
         """Swap model weights with EMA weights (call before/after val)."""
@@ -441,9 +455,11 @@ class CliffordNetLightning(L.LightningModule):
         if is_epoch_end and len(self.val_preds) > 0:
             all_preds = torch.cat(self.val_preds).numpy()
             all_labels = torch.cat(self.val_labels).numpy()
-            cm_local = confusion_matrix(all_labels, all_preds, labels=range(num_cls))
+            cm_local = confusion_matrix(
+                all_labels, all_preds, labels=range(num_cls))
 
-            cm_tensor = torch.tensor(cm_local, dtype=torch.int64, device=self.device)
+            cm_tensor = torch.tensor(
+                cm_local, dtype=torch.int64, device=self.device)
 
             if dist.is_initialized() and dist.get_world_size() > 1:
                 dist.all_reduce(cm_tensor, op=dist.ReduceOp.SUM)
@@ -461,7 +477,8 @@ class CliffordNetLightning(L.LightningModule):
                     sns.heatmap(cm_normalized, ax=ax, cmap="Blues", cbar=True)
                     ax.set_xlabel("Predicted")
                     ax.set_ylabel("True")
-                    ax.set_title(f"Confusion Matrix — Epoch {self.current_epoch}")
+                    ax.set_title(
+                        f"Confusion Matrix — Epoch {self.current_epoch}")
                     fig.tight_layout()
 
                     self.logger.experiment.log(
@@ -483,7 +500,8 @@ class CliffordNetLightning(L.LightningModule):
         np.fill_diagonal(cm_no_diag, 0)
 
         flat_indices = np.argsort(cm_no_diag.ravel())[-top_k:][::-1]
-        top_pairs = [(idx // cm.shape[1], idx % cm.shape[1]) for idx in flat_indices]
+        top_pairs = [(idx // cm.shape[1], idx % cm.shape[1])
+                     for idx in flat_indices]
 
         fig, ax = plt.subplots(figsize=(12, 8))
         pair_labels = [f"{true}->{pred}" for true, pred in top_pairs]
@@ -493,7 +511,8 @@ class CliffordNetLightning(L.LightningModule):
         ax.set_yticks(range(len(pair_labels)))
         ax.set_yticklabels(pair_labels)
         ax.set_xlabel("Count")
-        ax.set_title(f"Top {top_k} Confused Class Pairs — Epoch {self.current_epoch}")
+        ax.set_title(
+            f"Top {top_k} Confused Class Pairs — Epoch {self.current_epoch}")
         ax.invert_yaxis()
 
         for bar, count in zip(bars, pair_counts):
@@ -523,7 +542,8 @@ class CliffordNetLightning(L.LightningModule):
 
         ncols = 4
         nrows = (n + ncols - 1) // ncols
-        fig, axes = plt.subplots(nrows, ncols, figsize=(3 * ncols, 3.5 * nrows))
+        fig, axes = plt.subplots(
+            nrows, ncols, figsize=(3 * ncols, 3.5 * nrows))
         if nrows == 1:
             axes = [axes] if ncols == 1 else list(axes)
         else:
@@ -585,14 +605,14 @@ class CliffordNetLightning(L.LightningModule):
             lr=self.hparams.learning_rate,
         )
 
-        # Linear warmup for 5 epochs, then cosine decay to eta_min over
+        # Linear warmup for 1 epoch, then cosine decay to eta_min over
         # the remaining epochs.  Both schedulers step per-step (not per-epoch)
         # so the curve is smooth.
         # We estimate steps_per_epoch from the trainer if available.
         steps_per_epoch = (
             self.trainer.estimated_stepping_batches // self.hparams.max_epochs
         )
-        warmup_steps = 5 * steps_per_epoch
+        warmup_steps = 1 * steps_per_epoch
         total_steps = self.trainer.estimated_stepping_batches
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
@@ -684,7 +704,8 @@ class ImageNet1kDataModule(L.LightningDataModule):
                 transforms.RandAugment(num_ops=2, magnitude=9),
                 transforms.ColorJitter(0.4, 0.4, 0.4),
                 transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD),
+                transforms.Normalize(IMAGENET_DEFAULT_MEAN,
+                                     IMAGENET_DEFAULT_STD),
                 transforms.RandomErasing(p=0.25),
             ]
         )
@@ -693,7 +714,8 @@ class ImageNet1kDataModule(L.LightningDataModule):
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD),
+                transforms.Normalize(IMAGENET_DEFAULT_MEAN,
+                                     IMAGENET_DEFAULT_STD),
             ]
         )
 
@@ -757,7 +779,8 @@ def auto_find_batch_size(
     )
     model = torch.compile(model)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.05)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=1e-4, weight_decay=0.05)
 
     # Warm-up: run one small forward+backward+step to trigger torch.compile
     # and allocate optimizer states, so they don't inflate later measurements.
@@ -782,7 +805,8 @@ def auto_find_batch_size(
         del x_warmup, y_warmup, out, loss
         torch.cuda.empty_cache()
     except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
-        print(f"[AutoBS] Even min_batch_size={min_batch_size} OOM during warmup: {e}")
+        print(
+            f"[AutoBS] Even min_batch_size={min_batch_size} OOM during warmup: {e}")
         del model, criterion, optimizer
         torch.cuda.empty_cache()
         return min_batch_size
@@ -824,7 +848,7 @@ def auto_find_batch_size(
     torch.cuda.empty_cache()
 
     # Round down to nearest multiple of 8 for tensor-core efficiency
-    safe_bs = max(min_batch_size, ((int(best * 0.90)) // 8) * 8)
+    safe_bs = max(min_batch_size, ((int(best * 0.85)) // 8) * 8)
     print(f"[AutoBS] Max fit: {best}, using batch size: {safe_bs}")
     return safe_bs
 
@@ -977,7 +1001,8 @@ def main():
                 time.sleep(1)
             with open(bs_file, "r") as f:
                 detected_bs = int(f.read().strip())
-            print(f"[AutoBS] Rank {local_rank} received batch size: {detected_bs}")
+            print(
+                f"[AutoBS] Rank {local_rank} received batch size: {detected_bs}")
 
         args.batch_size = detected_bs
 
