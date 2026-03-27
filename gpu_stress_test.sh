@@ -15,7 +15,7 @@ set -euo pipefail
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 MAX_GPU=7                  # GPU index 0..MAX_GPU (inclusive), 0-7 = 8 GPUs
-MODEL_SIZE="small"
+MODEL_SIZE="12_2"
 BATCH_SIZE=0               # 0 = auto-detect
 EPOCHS=300
 DATA_DIR="./imagenet1k"

@@ -93,38 +93,57 @@ def prefetch_nfs_to_local(nfs_dir, local_dir):
 # ============================================================================
 
 
+class LayerNorm2d(nn.Module):
+    """Channel-wise LayerNorm for 2D feature maps, matching the reference implementation."""
+
+    def __init__(self, num_channels, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x):
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight[:, None, None] * x + self.bias[:, None, None]
+        return x
+
+
 class CliffordInteraction(nn.Module):
     """
     Clifford Geometric Product interaction layer with numerical stability options.
+    Aligned with the reference implementation: uses get_state (1x1 conv) and
+    get_context_local (DWConv->DWConv->BN->SiLU), with diff context mode
+    (C = context - state) as default.
 
     Args:
         dim: Feature dimension.
         shifts: List of cyclic shift offsets for sparse rolling interaction.
+        ctx_mode: Context mode — 'diff' (C = ctx - state, paper default) or 'abs' (C = ctx).
         wedge_mode: Numerical strategy for the wedge (exterior) product.
             - 'naive'   : Original subtraction (fast, but prone to bf16 cancellation).
             - 'fp32'    : Upcast operands to fp32 before the subtraction.
             - 'fma'     : Use fused multiply-add for error-free subtraction (most precise).
     """
 
-    def __init__(self, dim, shifts=[1, 2], wedge_mode="fma"):
+    def __init__(self, dim, shifts=[1, 2], ctx_mode="diff", wedge_mode="fma"):
         super().__init__()
         self.dim = dim
         self.shifts = shifts
+        self.ctx_mode = ctx_mode
         self.wedge_mode = wedge_mode
 
-        self.ctx_conv = nn.Sequential(
+        # Matches ref: self.get_context_local = DWConv -> DWConv -> BN -> SiLU
+        self.get_context_local = nn.Sequential(
             nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
-            nn.GroupNorm(1, dim, eps=1e-6),
-            nn.SiLU(),
             nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim, bias=False),
-            nn.GroupNorm(1, dim, eps=1e-6),
+            nn.BatchNorm2d(dim),
             nn.SiLU(),
         )
 
-        self.det_proj = nn.Conv2d(dim, dim, kernel_size=1)
-
-        self.norm_ctx = nn.GroupNorm(1, dim, eps=1e-6)
-        self.norm_det = nn.GroupNorm(1, dim, eps=1e-6)
+        # Matches ref: self.get_state = nn.Conv2d(dim, dim, kernel_size=1)
+        self.get_state = nn.Conv2d(dim, dim, kernel_size=1)
 
         input_proj_dim = 2 * len(shifts) * dim
         self.final_proj = nn.Conv2d(input_proj_dim, dim, kernel_size=1)
@@ -167,53 +186,65 @@ class CliffordInteraction(nn.Module):
         """
         Pure forward pass — NO side effects, fully torch.compile-safe.
 
+        Aligned with reference implementation:
+        - z_state = get_state(x)
+        - z_context_local = get_context_local(x)
+        - diff mode: C = z_context_local - z_state
+
         Args:
-            x: (B, C, H, W) input tensor.
+            x: (B, C, H, W) input tensor (pre-normed x_ln from the block).
             compute_ortho: If True, also return scalar ortho loss (mean |cos_sim|
-                between det and ctx streams) WITH gradients for backprop.
+                between state and context streams) WITH gradients for backprop.
 
         Returns:
             g_feat if compute_ortho is False, else (g_feat, ortho_loss).
         """
-        z_ctx = self.ctx_conv(x)
-        z_det = self.det_proj(x)
+        z_state = self.get_state(x)
+        z_context_local = self.get_context_local(x)
 
-        z_ctx = self.norm_ctx(z_ctx)
-        z_det = self.norm_det(z_det)
+        # Diff mode (paper Eq. 5): C = C_local - H
+        if self.ctx_mode == "diff":
+            C = z_context_local - z_state
+        elif self.ctx_mode == "abs":
+            C = z_context_local
+        else:
+            C = z_context_local - z_state  # default to diff
 
-        B, C, H, W = z_det.shape
+        B, Ch, H, W = z_state.shape
 
-        z_det_rolled = z_det[:, self._roll_idx]  # (B, S, C, H, W)
-        z_ctx_rolled = z_ctx[:, self._roll_idx]
+        # Shifted interactions using pre-computed roll indices
+        C_rolled = C[:, self._roll_idx]  # (B, S, C, H, W)
+        z_state_rolled = z_state[:, self._roll_idx]  # (B, S, C, H, W)
 
-        z_det_b = z_det.unsqueeze(1)  # (B, 1, C, H, W)
-        z_ctx_b = z_ctx.unsqueeze(1)
+        z_state_b = z_state.unsqueeze(1)  # (B, 1, C, H, W)
+        C_b = C.unsqueeze(1)  # (B, 1, C, H, W)
 
-        prod = z_det_b * z_ctx_rolled  # a*b term
+        # Inner product: SiLU(z_state * C_shifted)
+        prod = z_state_b * C_rolled  # a*b term
         dot = F.silu(prod)
 
-        # --- Wedge product with selectable numerical strategy ---
+        # --- Wedge product: z_state * C_shifted - C * z_state_shifted ---
         target_dtype = x.dtype
         if self.wedge_mode == "fma":
             wedge = self._wedge_fma(
-                z_det_b, z_ctx_rolled, z_det_rolled, z_ctx_b, target_dtype
+                z_state_b, C_rolled, z_state_rolled, C_b, target_dtype
             )
         elif self.wedge_mode == "fp32":
-            wedge = self._wedge_fp32(prod, z_det_rolled, z_ctx_b, target_dtype)
+            wedge = self._wedge_fp32(prod, z_state_rolled, C_b, target_dtype)
         else:  # "naive"
-            wedge = self._wedge_naive(prod, z_det_rolled, z_ctx_b, target_dtype)
+            wedge = self._wedge_naive(prod, z_state_rolled, C_b, target_dtype)
 
         pairs = torch.stack([dot, wedge], dim=2)
         S = len(self.shifts)
-        g_raw = pairs.reshape(B, S * 2 * C, H, W)
+        g_raw = pairs.reshape(B, S * 2 * Ch, H, W)
 
         g_feat = self.final_proj(g_raw)
 
         if compute_ortho:
-            # Mitigation 4: ortho loss WITH gradients (inside the compiled graph)
-            det_flat = z_det.flatten(2)  # (B, C, H*W)
-            ctx_flat = z_ctx.flatten(2)
-            cos_sim = F.cosine_similarity(det_flat, ctx_flat, dim=1)
+            # Ortho loss between state and context streams
+            state_flat = z_state.flatten(2)  # (B, C, H*W)
+            ctx_flat = z_context_local.flatten(2)
+            cos_sim = F.cosine_similarity(state_flat, ctx_flat, dim=1)
             ortho_loss = cos_sim.abs().mean()
             return g_feat, ortho_loss
 
@@ -225,41 +256,45 @@ class CliffordInteraction(nn.Module):
         Returns a dict of scalar diagnostic tensors (all detached, no grad).
         """
         with torch.no_grad():
-            z_ctx = self.ctx_conv(x)
-            z_det = self.det_proj(x)
+            z_state = self.get_state(x)
+            z_context_local = self.get_context_local(x)
 
-            z_ctx = self.norm_ctx(z_ctx)
-            z_det = self.norm_det(z_det)
+            if self.ctx_mode == "diff":
+                C = z_context_local - z_state
+            elif self.ctx_mode == "abs":
+                C = z_context_local
+            else:
+                C = z_context_local - z_state
 
-            B, C, H, W = z_det.shape
-            z_det_rolled = z_det[:, self._roll_idx]
-            z_ctx_rolled = z_ctx[:, self._roll_idx]
-            z_det_b = z_det.unsqueeze(1)
-            z_ctx_b = z_ctx.unsqueeze(1)
+            B, Ch, H, W = z_state.shape
+            C_rolled = C[:, self._roll_idx]
+            z_state_rolled = z_state[:, self._roll_idx]
+            z_state_b = z_state.unsqueeze(1)
+            C_b = C.unsqueeze(1)
 
-            prod = z_det_b * z_ctx_rolled
+            prod = z_state_b * C_rolled
             dot = F.silu(prod)
 
             target_dtype = x.dtype
             if self.wedge_mode == "fma":
                 wedge = self._wedge_fma(
-                    z_det_b, z_ctx_rolled, z_det_rolled, z_ctx_b, target_dtype
+                    z_state_b, C_rolled, z_state_rolled, C_b, target_dtype
                 )
             elif self.wedge_mode == "fp32":
-                wedge = self._wedge_fp32(prod, z_det_rolled, z_ctx_b, target_dtype)
+                wedge = self._wedge_fp32(prod, z_state_rolled, C_b, target_dtype)
             else:
-                wedge = self._wedge_naive(prod, z_det_rolled, z_ctx_b, target_dtype)
+                wedge = self._wedge_naive(prod, z_state_rolled, C_b, target_dtype)
 
             term_a = prod.float()
-            term_b = (z_det_rolled * z_ctx_b).float()
+            term_b = (z_state_rolled * C_b).float()
             abs_sum = term_a.abs() + term_b.abs() + 1e-12
             rel_diff = (term_a - term_b).abs() / abs_sum
             wedge_abs = wedge.float().abs()
             dot_abs = dot.float().abs()
 
-            det_flat = z_det.flatten(2)
-            ctx_flat = z_ctx.flatten(2)
-            cos_sim = F.cosine_similarity(det_flat, ctx_flat, dim=1)
+            state_flat = z_state.flatten(2)
+            ctx_flat = z_context_local.flatten(2)
+            cos_sim = F.cosine_similarity(state_flat, ctx_flat, dim=1)
 
             return {
                 "cancel/rel_diff_mean": rel_diff.mean(),
@@ -280,14 +315,16 @@ class CliffordBlock(nn.Module):
         dim,
         shifts,
         drop_path=0.0,
-        layer_scale_init_value=1e-6,
+        layer_scale_init_value=1e-5,
+        ctx_mode="diff",
         wedge_mode="fma",
     ):
         super().__init__()
-        self.norm = nn.GroupNorm(1, dim)
+        self.norm = LayerNorm2d(dim)
         self.interaction = CliffordInteraction(
             dim,
             shifts=shifts,
+            ctx_mode=ctx_mode,
             wedge_mode=wedge_mode,
         )
         self.gate_linear = nn.Conv2d(dim * 2, dim, kernel_size=1)
@@ -327,17 +364,19 @@ class CliffordNet(nn.Module):
         depth=12,
         shifts=[1, 2],
         drop_path_rate=0.1,
+        ctx_mode="diff",
         wedge_mode="fma",
     ):
         super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim
 
+        # Stem: match ref impl (patch_size=4 variant) with BN instead of GN
         self.stem = nn.Sequential(
             nn.Conv2d(
                 in_chans, embed_dim // 2, kernel_size=3, stride=2, padding=1, bias=False
             ),
-            nn.GroupNorm(1, embed_dim // 2),
+            nn.BatchNorm2d(embed_dim // 2),
             nn.SiLU(),
             nn.Conv2d(
                 embed_dim // 2,
@@ -347,8 +386,7 @@ class CliffordNet(nn.Module):
                 padding=1,
                 bias=False,
             ),
-            nn.GroupNorm(1, embed_dim),
-            nn.SiLU(),
+            nn.BatchNorm2d(embed_dim),
         )
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
@@ -358,13 +396,14 @@ class CliffordNet(nn.Module):
                     dim=embed_dim,
                     shifts=shifts,
                     drop_path=dpr[i],
+                    ctx_mode=ctx_mode,
                     wedge_mode=wedge_mode,
                 )
                 for i in range(depth)
             ]
         )
 
-        self.norm = nn.GroupNorm(1, embed_dim)
+        self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
         self.apply(self._init_weights)
 
@@ -373,6 +412,9 @@ class CliffordNet(nn.Module):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x, compute_ortho=False):
         """
@@ -393,8 +435,9 @@ class CliffordNet(nn.Module):
                 ortho_losses.append(ol)
             else:
                 x = block(x)
-        x = self.norm(x)
+        # Ref impl order: global avg pool -> LayerNorm -> head
         x = x.mean(dim=[-2, -1])
+        x = self.norm(x)
         logits = self.head(x)
 
         if compute_ortho:
@@ -407,53 +450,131 @@ class CliffordNet(nn.Module):
         return [block.interaction for block in self.blocks]
 
 
+# ============================================================================
 # Model Builders
+#
+# Naming: cliffordnet_{depth}_{num_shifts}
+# Following the original author's scaling philosophy:
+#   - embed_dim fixed at 128, scale capacity by depth
+#   - shifts = [1, 2, 4, ..., 2^(n-1)]  (powers of 2)
+#   - drop_path_rate ≈ 0.3 uniformly (0.4 for deepest)
+#   - patch_size=4 for ImageNet (224 → 56×56 feature map)
+#
+# "probe_*" variants are deliberately small for cheap hyperparam sweeps.
+# ============================================================================
 
 
-def cliffordnet_nano(num_classes=1000, wedge_mode="fma"):
+def _gen_shifts(n):
+    """Generate n power-of-2 shifts: [1, 2, 4, ..., 2^(n-1)]."""
+    return [1 << i for i in range(n)]
+
+
+# ---- Probe models (fast hyperparam search) --------------------------------
+
+
+def cliffordnet_probe_xs(num_classes=1000, wedge_mode="fma"):
+    """~0.3M params · depth=4, dim=64, 2 shifts — minutes per epoch on 1 GPU."""
     return CliffordNet(
         img_size=224,
-        embed_dim=128,
-        depth=8,
-        shifts=[1, 2, 4, 8],
-        num_classes=num_classes,
-        drop_path_rate=0.05,
-        wedge_mode=wedge_mode,
-    )
-
-
-def cliffordnet_small(num_classes=1000, wedge_mode="fma"):
-    return CliffordNet(
-        img_size=224,
-        embed_dim=192,
-        depth=12,
-        shifts=[1, 2, 4, 8],
+        embed_dim=64,
+        depth=4,
+        shifts=_gen_shifts(2),
         num_classes=num_classes,
         drop_path_rate=0.1,
         wedge_mode=wedge_mode,
     )
 
 
-def cliffordnet_base(num_classes=1000, wedge_mode="fma"):
+def cliffordnet_probe_s(num_classes=1000, wedge_mode="fma"):
+    """~1M params · depth=6, dim=96, 3 shifts — quick sanity / LR sweep."""
     return CliffordNet(
         img_size=224,
-        embed_dim=384,
-        depth=16,
-        shifts=[1, 2, 4, 8],
+        embed_dim=96,
+        depth=6,
+        shifts=_gen_shifts(3),
         num_classes=num_classes,
-        drop_path_rate=0.2,
+        drop_path_rate=0.15,
         wedge_mode=wedge_mode,
     )
 
 
-def cliffordnet_large(num_classes=1000, wedge_mode="fma"):
+# ---- Production models (aligned with author's configs) --------------------
+
+
+def cliffordnet_12_2(num_classes=1000, wedge_mode="fma"):
+    """Author's nano equivalent: depth=12, shifts=[1,2], dim=128."""
     return CliffordNet(
         img_size=224,
-        embed_dim=512,
-        depth=24,
-        shifts=[1, 2, 4, 8, 16],
+        embed_dim=128,
+        depth=12,
+        shifts=_gen_shifts(2),
         num_classes=num_classes,
         drop_path_rate=0.3,
+        wedge_mode=wedge_mode,
+    )
+
+
+def cliffordnet_12_5(num_classes=1000, wedge_mode="fma"):
+    """Author's lite equivalent: depth=12, shifts=[1,2,4,8,16], dim=128."""
+    return CliffordNet(
+        img_size=224,
+        embed_dim=128,
+        depth=12,
+        shifts=_gen_shifts(5),
+        num_classes=num_classes,
+        drop_path_rate=0.3,
+        wedge_mode=wedge_mode,
+    )
+
+
+def cliffordnet_18_5(num_classes=1000, wedge_mode="fma"):
+    """depth=18, shifts=[1,2,4,8,16], dim=128."""
+    return CliffordNet(
+        img_size=224,
+        embed_dim=128,
+        depth=18,
+        shifts=_gen_shifts(5),
+        num_classes=num_classes,
+        drop_path_rate=0.3,
+        wedge_mode=wedge_mode,
+    )
+
+
+def cliffordnet_32_3(num_classes=1000, wedge_mode="fma"):
+    """Author's small equivalent: depth=32, shifts=[1,2,4], dim=128."""
+    return CliffordNet(
+        img_size=224,
+        embed_dim=128,
+        depth=32,
+        shifts=_gen_shifts(3),
+        num_classes=num_classes,
+        drop_path_rate=0.3,
+        wedge_mode=wedge_mode,
+    )
+
+
+def cliffordnet_32_5(num_classes=1000, wedge_mode="fma"):
+    """Author's small-wide equivalent: depth=32, shifts=[1,2,4,8,16], dim=128."""
+    return CliffordNet(
+        img_size=224,
+        embed_dim=128,
+        depth=32,
+        shifts=_gen_shifts(5),
+        num_classes=num_classes,
+        drop_path_rate=0.3,
+        wedge_mode=wedge_mode,
+    )
+
+
+def cliffordnet_64_5(num_classes=1000, wedge_mode="fma"):
+    """Author's deep equivalent: depth=64, shifts=[1,2,4,8,16], dim=128."""
+    return CliffordNet(
+        img_size=224,
+        embed_dim=128,
+        depth=64,
+        shifts=_gen_shifts(5),
+        num_classes=num_classes,
+        drop_path_rate=0.4,
         wedge_mode=wedge_mode,
     )
 
@@ -477,7 +598,7 @@ class CliffordNetLightning(L.LightningModule):
         mixup_switch_prob=0.5,
         ema_decay=0.9999,
         wedge_mode="fma",
-        ortho_weight=0.1,
+        ortho_weight=0.01,
         enable_diagnostics=True,
         diag_log_interval=100,
     ):
@@ -485,10 +606,16 @@ class CliffordNetLightning(L.LightningModule):
         self.save_hyperparameters()
 
         model_builders = {
-            "nano": cliffordnet_nano,
-            "small": cliffordnet_small,
-            "base": cliffordnet_base,
-            "large": cliffordnet_large,
+            # Probe models (hyperparam search)
+            "probe_xs": cliffordnet_probe_xs,
+            "probe_s": cliffordnet_probe_s,
+            # Production models (author-aligned: depth scaling, dim=128)
+            "12_2": cliffordnet_12_2,
+            "12_5": cliffordnet_12_5,
+            "18_5": cliffordnet_18_5,
+            "32_3": cliffordnet_32_3,
+            "32_5": cliffordnet_32_5,
+            "64_5": cliffordnet_64_5,
         }
 
         # Build the raw (un-compiled) model — keep a reference for:
@@ -699,16 +826,16 @@ class CliffordNetLightning(L.LightningModule):
 
     def _build_grad_param_groups(self):
         """W2 fix: cache parameter groups once to avoid re-iterating named_parameters."""
-        det_params, ctx_params, proj_params = [], [], []
+        state_params, ctx_params, proj_params = [], [], []
         for name, param in self._raw_model.named_parameters():
-            if ".det_proj." in name or ".norm_det." in name:
-                det_params.append(param)
-            elif ".ctx_conv." in name or ".norm_ctx." in name:
+            if ".get_state." in name:
+                state_params.append(param)
+            elif ".get_context_local." in name:
                 ctx_params.append(param)
             elif ".final_proj." in name:
                 proj_params.append(param)
         self._grad_param_groups = {
-            "det_stream": det_params,
+            "state_stream": state_params,
             "ctx_stream": ctx_params,
             "final_proj": proj_params,
         }
@@ -741,12 +868,12 @@ class CliffordNetLightning(L.LightningModule):
                 sync_dist=False,
             )
 
-        # Log ratio: if det/ctx gradient norms diverge, the wedge branch
+        # Log ratio: if state/ctx gradient norms diverge, the wedge branch
         # might be experiencing vanishing/exploding gradients relative to dot
-        if "det_stream" in norms and "ctx_stream" in norms:
-            ratio = norms["det_stream"] / (norms["ctx_stream"] + 1e-12)
+        if "state_stream" in norms and "ctx_stream" in norms:
+            ratio = norms["state_stream"] / (norms["ctx_stream"] + 1e-12)
             self.log(
-                "diag/grad_norm/det_ctx_ratio",
+                "diag/grad_norm/state_ctx_ratio",
                 ratio,
                 prog_bar=False,
                 sync_dist=False,
@@ -1205,9 +1332,11 @@ def main():
     parser.add_argument(
         "--model-size",
         type=str,
-        default="small",
-        choices=["nano", "small", "base", "large"],
-        help="Model size variant",
+        default="12_2",
+        choices=["probe_xs", "probe_s", "12_2", "12_5", "18_5", "32_3", "32_5", "64_5"],
+        help="Model size variant. "
+        "'probe_*' = tiny models for fast hyperparam sweeps. "
+        "'{depth}_{shifts}' = author-aligned configs (dim=128, scale by depth).",
     )
     parser.add_argument(
         "--batch-size",
@@ -1308,9 +1437,9 @@ def main():
     parser.add_argument(
         "--ortho-weight",
         type=float,
-        default=0.1,
-        help="Weight for orthogonality regularization loss between det/ctx streams "
-        "(0.0 = disabled, default: 0.1). Recommended range: 0.01–0.1.",
+        default=0.01,
+        help="Weight for orthogonality regularization loss between state/ctx streams "
+        "(0.0 = disabled, default: 0.01). Recommended range: 0.01–0.1.",
     )
     parser.add_argument(
         "--no-diagnostics",
@@ -1449,13 +1578,18 @@ def main():
 
 def _model_kwargs_for_size(size):
     """Return CliffordNet constructor kwargs for a given model size string."""
+    shifts = _gen_shifts
     configs = {
-        "nano": dict(embed_dim=128, depth=8, shifts=[1, 2, 4, 8], drop_path_rate=0.05),
-        "small": dict(embed_dim=192, depth=12, shifts=[1, 2, 4, 8], drop_path_rate=0.1),
-        "base": dict(embed_dim=384, depth=16, shifts=[1, 2, 4, 8], drop_path_rate=0.2),
-        "large": dict(
-            embed_dim=512, depth=24, shifts=[1, 2, 4, 8, 16], drop_path_rate=0.3
-        ),
+        # Probe models (hyperparam search)
+        "probe_xs": dict(embed_dim=64, depth=4, shifts=shifts(2), drop_path_rate=0.1),
+        "probe_s": dict(embed_dim=96, depth=6, shifts=shifts(3), drop_path_rate=0.15),
+        # Production models (author-aligned)
+        "12_2": dict(embed_dim=128, depth=12, shifts=shifts(2), drop_path_rate=0.3),
+        "12_5": dict(embed_dim=128, depth=12, shifts=shifts(5), drop_path_rate=0.3),
+        "18_5": dict(embed_dim=128, depth=18, shifts=shifts(5), drop_path_rate=0.3),
+        "32_3": dict(embed_dim=128, depth=32, shifts=shifts(3), drop_path_rate=0.3),
+        "32_5": dict(embed_dim=128, depth=32, shifts=shifts(5), drop_path_rate=0.3),
+        "64_5": dict(embed_dim=128, depth=64, shifts=shifts(5), drop_path_rate=0.4),
     }
     kwargs = configs[size]
     kwargs["num_classes"] = 1000
