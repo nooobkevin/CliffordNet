@@ -1,0 +1,65 @@
+# W&B Hyperparameter Sweep — CliffordNet
+#
+# Searches the core training hyperparameters on small probe models.
+# Run with:
+#   wandb sweep sweep_hparam.yaml          # prints a sweep ID
+#   wandb agent <entity>/<project>/<id>    # start one agent per GPU
+#
+# Each run trains for --epochs 30 on probe_xs (206K params) which takes
+# only minutes on a single GPU — enough signal for LR / WD / ortho search.
+# Transfer: take the best lr / weight_decay and use them directly on
+# production models (probe_s → 12_2 → 32_5).
+
+program: train_sweep.py
+method: bayes
+
+metric:
+  name: val/acc1
+  goal: maximize
+
+# Early termination: kill a run if val/acc1 hasn't improved past the
+# median of finished runs by step 15 (half of 30 epochs).
+early_terminate:
+  type: hyperband
+  min_iter: 10
+  eta: 2
+
+parameters:
+  # ── Searched ─────────────────────────────────────────────────────────
+  lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 2e-3
+
+  ortho_weight:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 0.1
+
+  # ── Fixed for this sweep ─────────────────────────────────────────────
+  weight_decay:
+    value: 0.05
+
+  drop_path_rate:
+    value: 0.1
+
+  mixup_alpha:
+    value: 0.8
+
+  cutmix_alpha:
+    value: 1.0
+
+  model_size:
+    value: probe_xs          # 206K params — fast iteration
+
+  epochs:
+    value: 10                # short runs — 10 epochs is enough for LR / ortho signal
+
+  batch_size:
+    value: 2560              # ~80GB VRAM, push utilization close to limit
+
+  num_workers:
+    value: 8
+
+  wedge_mode:
+    value: fma

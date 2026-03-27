@@ -1,0 +1,65 @@
+# W&B Architecture Sweep — CliffordNet
+#
+# After sweep_hparam.yaml identifies the best lr / weight_decay / ortho_weight,
+# freeze those and search over architectural choices.
+#
+# IMPORTANT: runs in this sweep are NOT comparable on raw val/acc1 — larger
+# models will score higher.  Use val/acc1 vs. FLOPs (or param count) as the
+# true figure of merit.  W&B parallel-coordinates plot is helpful here.
+#
+# Usage:
+#   wandb sweep sweep_arch.yaml
+#   wandb agent <entity>/<project>/<id>
+#
+# Replace the lr / weight_decay / ortho_weight below with the best values
+# found by sweep_hparam.yaml before launching.
+
+program: train_sweep.py
+method: grid            # grid is fine — the space is small and discrete
+
+metric:
+  name: val/acc1
+  goal: maximize
+
+parameters:
+  # ── Architecture axes ────────────────────────────────────────────────
+  model_size:
+    # Covers: probe_xs(206K), probe_s(652K), 12_2(tiny), 12_5(lite)
+    # Omit deeper/wider models — they take too long for a sweep run.
+    values:
+      - probe_xs
+      - probe_s
+      - 12_2
+      - 12_5
+
+  # ── Best hparams from sweep_hparam (fill in after that sweep) ────────
+  lr:
+    value: 5e-4          # REPLACE with best from sweep_hparam
+
+  weight_decay:
+    value: 0.05          # REPLACE with best from sweep_hparam
+
+  ortho_weight:
+    value: 0.01          # REPLACE with best from sweep_hparam
+
+  drop_path_rate:
+    value: 0.1           # REPLACE with best from sweep_hparam (or keep per-model default)
+
+  mixup_alpha:
+    value: 0.8
+
+  cutmix_alpha:
+    value: 1.0
+
+  # ── Fixed runtime ────────────────────────────────────────────────────
+  epochs:
+    value: 30
+
+  batch_size:
+    value: 256
+
+  num_workers:
+    value: 8
+
+  wedge_mode:
+    value: fma
