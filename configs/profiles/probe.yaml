@@ -3,7 +3,7 @@ run:
   tags: [probe]
 
 model:
-  size: hier_p4
+  size: hier_can_tiny
   diag_log_interval: 200
 
 training:

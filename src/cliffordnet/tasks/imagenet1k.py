@@ -421,10 +421,39 @@ class CliffordNet(nn.Module):
         return all_diags
 
 
-class HierarchicalStem(nn.Module):
-    def __init__(self, in_chans, embed_dim, patch_size):
+class GeometricStem(nn.Module):
+    def __init__(self, in_chans=3, embed_dim=128, patch_size=4):
         super().__init__()
-        if patch_size == 4:
+        if patch_size == 1:
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_chans,
+                    embed_dim // 2,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim // 2),
+                nn.SiLU(),
+                nn.Conv2d(
+                    embed_dim // 2,
+                    embed_dim,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+            )
+        elif patch_size == 2:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            )
+        elif patch_size == 4:
             self.proj = nn.Sequential(
                 nn.Conv2d(
                     in_chans,
@@ -444,61 +473,60 @@ class HierarchicalStem(nn.Module):
                     padding=1,
                     bias=False,
                 ),
-                nn.BatchNorm2d(embed_dim),
             )
-        elif patch_size == 2:
-            hidden_dim = max(embed_dim // 2, 32)
-            self.proj = nn.Sequential(
+        else:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=patch_size,
+                stride=patch_size,
+            )
+        self.norm = nn.BatchNorm2d(embed_dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        x = self.norm(x)
+        return x
+
+
+class StageDownsample(nn.Module):
+    def __init__(self, in_dim, out_dim, mode="avgpool"):
+        super().__init__()
+        if mode == "avgpool":
+            self.down = nn.AvgPool2d(kernel_size=2, stride=2)
+            self.proj = (
+                nn.Conv2d(in_dim, out_dim, kernel_size=1)
+                if in_dim != out_dim
+                else nn.Identity()
+            )
+        elif mode == "conv":
+            self.down = nn.Sequential(
                 nn.Conv2d(
-                    in_chans,
-                    hidden_dim,
+                    in_dim,
+                    in_dim,
                     kernel_size=3,
                     stride=2,
                     padding=1,
+                    groups=in_dim,
                     bias=False,
                 ),
-                nn.BatchNorm2d(hidden_dim),
+                nn.BatchNorm2d(in_dim),
                 nn.SiLU(),
-                nn.Conv2d(
-                    hidden_dim,
-                    embed_dim,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    bias=False,
-                ),
-                nn.BatchNorm2d(embed_dim),
             )
+            self.proj = (
+                nn.Conv2d(in_dim, out_dim, kernel_size=1)
+                if in_dim != out_dim
+                else nn.Identity()
+            )
+        elif mode == "patch":
+            self.down = nn.Identity()
+            self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=2, stride=2)
         else:
-            raise ValueError("Hierarchical ImageNet stem only supports patch_size 2 or 4.")
+            raise ValueError(f"Invalid downsample mode: {mode}")
 
     def forward(self, x):
-        return self.proj(x)
-
-
-class ConvStageDownsample(nn.Module):
-    def __init__(self, in_dim, out_dim):
-        super().__init__()
-        self.pre_norm = nn.BatchNorm2d(in_dim)
-        self.depthwise = nn.Conv2d(
-            in_dim,
-            in_dim,
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            groups=in_dim,
-            bias=False,
-        )
-        self.act = nn.SiLU()
-        self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=1, bias=False)
-        self.out_norm = nn.BatchNorm2d(out_dim)
-
-    def forward(self, x):
-        x = self.pre_norm(x)
-        x = self.depthwise(x)
-        x = self.act(x)
+        x = self.down(x)
         x = self.proj(x)
-        x = self.out_norm(x)
         return x
 
 
@@ -508,28 +536,48 @@ class HierarchicalCliffordNet(nn.Module):
         num_classes=1000,
         in_chans=3,
         patch_size=4,
-        stage_dims=(48, 96, 160, 256),
+        embed_dim=48,
+        shifts=(1, 2),
         stage_depths=(2, 2, 4, 2),
-        stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+        stage_dims=None,
+        dim_policy="double",
+        downsample_mode="conv",
         drop_path_rate=0.20,
         ctx_mode="diff",
         wedge_mode="fma",
     ):
         super().__init__()
-        if len(stage_dims) != len(stage_depths):
-            raise ValueError("stage_dims and stage_depths must have the same length.")
-        if len(stage_shifts) != len(stage_depths):
-            raise ValueError("stage_shifts and stage_depths must have the same length.")
+        if len(stage_depths) == 0:
+            raise ValueError("stage_depths must not be empty")
+
+        if stage_dims is None:
+            if dim_policy == "double":
+                stage_dims = [embed_dim * (2**i) for i in range(len(stage_depths))]
+            elif dim_policy == "constant":
+                stage_dims = [embed_dim for _ in stage_depths]
+            else:
+                raise ValueError(f"Invalid dim_policy: {dim_policy}")
+        else:
+            if len(stage_dims) != len(stage_depths):
+                raise ValueError("stage_dims must have the same length as stage_depths")
+            stage_dims = list(stage_dims)
 
         self.num_classes = num_classes
         self.patch_size = patch_size
-        self.stage_dims = tuple(stage_dims)
-        self.stage_depths = tuple(stage_depths)
-        self.stage_shifts = tuple(tuple(s) for s in stage_shifts)
-        self.stem = HierarchicalStem(
+        self.embed_dim = embed_dim
+        self.shifts = tuple(shifts)
+        self.stage_depths = list(stage_depths)
+        self.stage_dims = stage_dims
+        self.downsample_mode = downsample_mode
+        self.patch_embed = GeometricStem(
             in_chans=in_chans,
-            embed_dim=stage_dims[0],
+            embed_dim=embed_dim,
             patch_size=patch_size,
+        )
+        self.stem_proj = (
+            nn.Conv2d(embed_dim, stage_dims[0], kernel_size=1)
+            if embed_dim != stage_dims[0]
+            else nn.Identity()
         )
 
         total_blocks = sum(stage_depths)
@@ -538,29 +586,27 @@ class HierarchicalCliffordNet(nn.Module):
         self.downsamples = nn.ModuleList()
 
         block_idx = 0
-        for stage_idx, (dim, depth, shifts) in enumerate(
-            zip(stage_dims, stage_depths, stage_shifts)
-        ):
-            blocks = nn.ModuleList(
-                [
+        for stage_idx, (depth, dim) in enumerate(zip(stage_depths, stage_dims)):
+            blocks = []
+            for _ in range(depth):
+                blocks.append(
                     CliffordBlock(
                         dim=dim,
-                        shifts=list(shifts),
-                        drop_path=dpr[block_idx + local_idx],
+                        shifts=list(self.shifts),
+                        drop_path=dpr[block_idx],
                         ctx_mode=ctx_mode,
                         wedge_mode=wedge_mode,
                     )
-                    for local_idx in range(depth)
-                ]
-            )
-            block_idx += depth
-            self.stages.append(blocks)
+                )
+                block_idx += 1
+            self.stages.append(nn.Sequential(*blocks))
 
             if stage_idx < len(stage_depths) - 1:
                 self.downsamples.append(
-                    ConvStageDownsample(
+                    StageDownsample(
                         in_dim=stage_dims[stage_idx],
                         out_dim=stage_dims[stage_idx + 1],
+                        mode=downsample_mode,
                     )
                 )
 
@@ -585,10 +631,20 @@ class HierarchicalCliffordNet(nn.Module):
     def diagnostic_block_labels(self):
         return [label for label, _block in self.iter_blocks()]
 
+    def forward_features(self, x):
+        x = self.patch_embed(x)
+        x = self.stem_proj(x)
+        for stage_idx, stage in enumerate(self.stages):
+            x = stage(x)
+            if stage_idx < len(self.downsamples):
+                x = self.downsamples[stage_idx](x)
+        return x
+
     def forward_diagnostics(self, x):
         all_diags = {}
         with torch.no_grad():
-            x = self.stem(x)
+            x = self.patch_embed(x)
+            x = self.stem_proj(x)
             for stage_idx, stage in enumerate(self.stages):
                 for block_idx, block in enumerate(stage):
                     label = f"stage_{stage_idx}_block_{block_idx}"
@@ -600,17 +656,19 @@ class HierarchicalCliffordNet(nn.Module):
         return all_diags
 
     def forward(self, x, compute_ortho=False):
-        x = self.stem(x)
-        ortho_losses = []
-        for stage_idx, stage in enumerate(self.stages):
-            for block in stage:
-                if compute_ortho:
+        if compute_ortho:
+            x = self.patch_embed(x)
+            x = self.stem_proj(x)
+            ortho_losses = []
+            for stage_idx, stage in enumerate(self.stages):
+                for block in stage:
                     x, ortho_loss = block(x, compute_ortho=True)
                     ortho_losses.append(ortho_loss)
-                else:
-                    x = block(x)
-            if stage_idx < len(self.downsamples):
-                x = self.downsamples[stage_idx](x)
+                if stage_idx < len(self.downsamples):
+                    x = self.downsamples[stage_idx](x)
+        else:
+            x = self.forward_features(x)
+            ortho_losses = None
 
         x = x.mean(dim=[-2, -1])
         x = self.norm(x)
@@ -750,27 +808,47 @@ def cliffordnet_64_5(num_classes=1000, wedge_mode="fma"):
 
 
 def hier_cliffordnet_p4(num_classes=1000, wedge_mode="fma"):
-    """Hierarchical 224 -> 56 -> 28 -> 14 -> 7 ImageNet backbone."""
+    """CAN-style hierarchical backbone with patch-4 ImageNet stem."""
     return HierarchicalCliffordNet(
         num_classes=num_classes,
         patch_size=4,
+        embed_dim=48,
         stage_dims=(48, 96, 160, 256),
         stage_depths=(2, 2, 4, 2),
-        stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+        shifts=(1, 2),
+        downsample_mode="conv",
         drop_path_rate=0.20,
         wedge_mode=wedge_mode,
     )
 
 
 def hier_cliffordnet_p2(num_classes=1000, wedge_mode="fma"):
-    """Hierarchical 224 -> 112 -> 56 -> 28 -> 14 -> 7 ImageNet backbone."""
+    """CAN-style hierarchical backbone with patch-2 ImageNet stem."""
     return HierarchicalCliffordNet(
         num_classes=num_classes,
         patch_size=2,
+        embed_dim=32,
         stage_dims=(32, 64, 96, 160, 256),
         stage_depths=(1, 2, 2, 4, 2),
-        stage_shifts=((1,), (1,), (1,), (1, 2), (1, 2)),
+        shifts=(1, 2),
+        downsample_mode="conv",
         drop_path_rate=0.15,
+        wedge_mode=wedge_mode,
+    )
+
+
+def hier_cliffordnet_can_tiny(num_classes=1000, wedge_mode="fma"):
+    """Closest ImageNet-oriented port of CAN model_hier defaults."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=4,
+        embed_dim=32,
+        stage_depths=(3, 4, 5),
+        stage_dims=None,
+        dim_policy="double",
+        shifts=(1, 2),
+        downsample_mode="conv",
+        drop_path_rate=0.10,
         wedge_mode=wedge_mode,
     )
 
@@ -789,6 +867,7 @@ MODEL_BUILDERS = {
     # ImageNet-oriented hierarchical variants suggested in CAN issue #5
     "hier_p4": hier_cliffordnet_p4,
     "hier_p2": hier_cliffordnet_p2,
+    "hier_can_tiny": hier_cliffordnet_can_tiny,
 }
 
 
@@ -1495,12 +1574,12 @@ def main():
     parser.add_argument(
         "--model-size",
         type=str,
-        default="12_2",
+        default="hier_can_tiny",
         choices=MODEL_SIZE_CHOICES,
         help="Model size variant. "
         "'probe_*' = tiny models for fast hyperparam sweeps. "
         "'{depth}_{shifts}' = single-stage configs. "
-        "'hier_*' = pyramidal ImageNet configs.",
+        "'hier_*' = CAN-style hierarchical ImageNet configs.",
     )
     parser.add_argument(
         "--batch-size",
@@ -1632,7 +1711,7 @@ def main():
             probe_device = torch.device(f"cuda:{local_rank}")
             print(f"[AutoBS] Probing on {probe_device} ...")
             detected_bs = auto_find_batch_size(
-                model_cls=CliffordNet,
+                model_cls=model_cls_for_size(args.model_size),
                 model_kwargs=_model_kwargs_for_size(args.model_size),
                 device=probe_device,
             )
@@ -1743,17 +1822,31 @@ def _model_kwargs_for_size(size):
         # Hierarchical ImageNet variants
         "hier_p4": dict(
             patch_size=4,
+            embed_dim=48,
             stage_dims=(48, 96, 160, 256),
             stage_depths=(2, 2, 4, 2),
-            stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+            shifts=(1, 2),
+            downsample_mode="conv",
             drop_path_rate=0.20,
         ),
         "hier_p2": dict(
             patch_size=2,
+            embed_dim=32,
             stage_dims=(32, 64, 96, 160, 256),
             stage_depths=(1, 2, 2, 4, 2),
-            stage_shifts=((1,), (1,), (1,), (1, 2), (1, 2)),
+            shifts=(1, 2),
+            downsample_mode="conv",
             drop_path_rate=0.15,
+        ),
+        "hier_can_tiny": dict(
+            patch_size=4,
+            embed_dim=32,
+            stage_depths=(3, 4, 5),
+            stage_dims=None,
+            dim_policy="double",
+            shifts=(1, 2),
+            downsample_mode="conv",
+            drop_path_rate=0.10,
         ),
     }
     kwargs = configs[size]

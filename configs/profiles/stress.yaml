@@ -3,7 +3,7 @@ run:
   tags: [stress, hpc-workload]
 
 model:
-  size: hier_p4
+  size: hier_can_tiny
   wedge_mode: fma
   ortho_weight: 0.03
   enable_diagnostics: true

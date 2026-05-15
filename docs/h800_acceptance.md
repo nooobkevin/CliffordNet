@@ -38,6 +38,6 @@ wandb agent <entity>/<project>/<sweep-id>
 Recommended acceptance criteria:
 
 - Slurm script contains `--gpus-per-node=h800:8` and `torchrun --nproc_per_node=8`.
-- W&B run config records `model.size=hier_p4`, detected resources, effective global batch size, and LR.
+- W&B run config records `model.size=hier_can_tiny`, detected resources, effective global batch size, and LR.
 - Training creates `run_manifest.yaml` and `checkpoints/last.ckpt` under `run.output_dir/run.name`.
 - Sweep runs auto-detect `batch_size` when sweep config sets `batch_size=0`.

@@ -31,6 +31,7 @@ parameters:
       - probe_s
       - 12_2
       - 12_5
+      - hier_can_tiny
       - hier_p4
       - hier_p2
 

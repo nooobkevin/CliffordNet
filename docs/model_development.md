@@ -13,7 +13,7 @@ Recommended workflow for stability experiments:
 
 1. Start with `configs/profiles/smoke.yaml` to validate imports and dataloading.
 2. Use `configs/profiles/probe.yaml` to test a small model quickly.
-3. Use `hier_p4` first; `hier_p2` is available when you want the higher-resolution 112 -> 56 -> 28 -> 14 -> 7 variant.
+3. Use `hier_can_tiny` first when you want the closest CAN `model_hier.py` style baseline on ImageNet; `hier_p4` and `hier_p2` remain ImageNet-oriented variants.
 4. Apply stable recipe edits in `configs/profiles/stable_imagenet1k.yaml`.
 5. Move model-structure edits into `src/cliffordnet/tasks/imagenet1k.py` once the recipe-level signal is clear.
 6. Use `configs/profiles/stress.yaml` for long HPC workload runs after the small runs are stable.
