@@ -4,11 +4,11 @@
 # Tests each GPU individually (single-GPU) and all GPUs together (multi-GPU DDP)
 #
 # Usage:
-#   ./gpu_stress_test.sh                  # Test GPU 0-7, default settings
-#   ./gpu_stress_test.sh --max-gpu 3      # Test GPU 0-3 only
-#   ./gpu_stress_test.sh --model-size base # Use a larger model
-#   ./gpu_stress_test.sh --skip-single    # Only run multi-GPU test
-#   ./gpu_stress_test.sh --skip-multi     # Only run single-GPU tests
+#   bash scripts/gpu_stress_test.sh                  # Test GPU 0-7, default settings
+#   bash scripts/gpu_stress_test.sh --max-gpu 3      # Test GPU 0-3 only
+#   bash scripts/gpu_stress_test.sh --model-size 12_5 # Use a larger model
+#   bash scripts/gpu_stress_test.sh --skip-single    # Only run multi-GPU test
+#   bash scripts/gpu_stress_test.sh --skip-multi     # Only run single-GPU tests
 # =============================================================================
 
 set -euo pipefail
@@ -21,7 +21,7 @@ EPOCHS=300
 DATA_DIR="./imagenet1k"
 OUTPUT_BASE="./outputs_stress_test"
 NUM_WORKERS=4
-WANDB_OFFLINE=""
+WANDB_MODE="online"
 SKIP_SINGLE=false
 SKIP_MULTI=false
 MASTER_PORT=29500
@@ -36,7 +36,7 @@ while [[ $# -gt 0 ]]; do
         --data-dir)      DATA_DIR="$2"; shift 2 ;;
         --output-dir)    OUTPUT_BASE="$2"; shift 2 ;;
         --num-workers)   NUM_WORKERS="$2"; shift 2 ;;
-        --wandb-offline) WANDB_OFFLINE="--wandb-offline"; shift ;;
+        --wandb-offline) WANDB_MODE="offline"; shift ;;
         --skip-single)   SKIP_SINGLE=true; shift ;;
         --skip-multi)    SKIP_MULTI=true; shift ;;
         --master-port)   MASTER_PORT="$2"; shift 2 ;;
@@ -135,18 +135,20 @@ if [[ "${SKIP_SINGLE}" == false ]]; then
         echo -e "${YELLOW}[LAUNCH]${NC} ${test_name} -> ${log_file}"
 
         CUDA_VISIBLE_DEVICES="${gpu_id}" \
-        uv run python train_imagenet1k.py \
-            --data-dir "${DATA_DIR}" \
-            --model-size "${MODEL_SIZE}" \
-            --batch-size "${BATCH_SIZE}" \
-            --epochs "${EPOCHS}" \
-            --num-gpus 1 \
-            --num-nodes 1 \
-            --num-workers "${NUM_WORKERS}" \
-            --output-dir "${output_dir}" \
-            --wandb-project "CliffordNet" \
-            --wandb-run-name "stress_single_gpu${gpu_id}_${TIMESTAMP}" \
-            ${WANDB_OFFLINE} \
+        uv run cliffordnet-train \
+            --config configs/imagenet1k.yaml \
+            --config configs/profiles/stress.yaml \
+            --set data.data_dir="${DATA_DIR}" \
+            --set model.size="${MODEL_SIZE}" \
+            --set training.batch_size="${BATCH_SIZE}" \
+            --set training.max_epochs="${EPOCHS}" \
+            --set runtime.devices=1 \
+            --set runtime.num_nodes=1 \
+            --set data.num_workers="${NUM_WORKERS}" \
+            --set run.output_dir="${output_dir}" \
+            --set run.name="stress_single_gpu${gpu_id}_${TIMESTAMP}" \
+            --set wandb.project=CliffordNet \
+            --set wandb.mode="${WANDB_MODE}" \
             > "${log_file}" 2>&1 &
 
         PIDS+=($!)
@@ -204,18 +206,20 @@ if [[ "${SKIP_MULTI}" == false ]]; then
             --standalone \
             --nproc_per_node="${NUM_GPUS}" \
             --master_port="${MASTER_PORT}" \
-            train_imagenet1k.py \
-            --data-dir "${DATA_DIR}" \
-            --model-size "${MODEL_SIZE}" \
-            --batch-size "${BATCH_SIZE}" \
-            --epochs "${EPOCHS}" \
-            --num-gpus "${NUM_GPUS}" \
-            --num-nodes 1 \
-            --num-workers "${NUM_WORKERS}" \
-            --output-dir "${multi_output_dir}" \
-            --wandb-project "CliffordNet" \
-            --wandb-run-name "stress_multi_${NUM_GPUS}gpu_${TIMESTAMP}" \
-            ${WANDB_OFFLINE}
+            -m cliffordnet.train \
+            --config configs/imagenet1k.yaml \
+            --config configs/profiles/stress.yaml \
+            --set data.data_dir="${DATA_DIR}" \
+            --set model.size="${MODEL_SIZE}" \
+            --set training.batch_size="${BATCH_SIZE}" \
+            --set training.max_epochs="${EPOCHS}" \
+            --set runtime.devices="${NUM_GPUS}" \
+            --set runtime.num_nodes=1 \
+            --set data.num_workers="${NUM_WORKERS}" \
+            --set run.output_dir="${multi_output_dir}" \
+            --set run.name="stress_multi_${NUM_GPUS}gpu_${TIMESTAMP}" \
+            --set wandb.project=CliffordNet \
+            --set wandb.mode="${WANDB_MODE}"
 fi
 
 # =============================================================================

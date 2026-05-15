@@ -12,42 +12,101 @@ uv sync
 
 ### Train
 
-Single GPU:
+The canonical entrypoint is config-driven. Later config files override earlier ones, and `--set key=value` overrides both.
+
+Smoke test:
 
 ```bash
-uv run python train_imagenet1k.py \
-  --data-dir ./imagenet1k \
-  --model-size small \
-  --batch-size 64 \
-  --lr 1e-3
+uv run cliffordnet-train \
+  --config configs/imagenet1k.yaml \
+  --config configs/profiles/smoke.yaml \
+  --set data.data_dir=./imagenet1k
 ```
 
-Multi-GPU (single node, 8 GPUs):
+Stable ImageNet-1k workload:
 
 ```bash
-uv run python train_imagenet1k.py \
-  --data-dir ./imagenet1k \
-  --model-size small \
-  --batch-size 64 \
-  --num-gpus 8 \
-  --lr 1e-3
+uv run cliffordnet-train \
+  --config configs/imagenet1k.yaml \
+  --config configs/profiles/stable_imagenet1k.yaml \
+  --set data.data_dir=/t1/imagenet1k
 ```
 
-Multi-node (via SLURM):
+Set `training.batch_size=0` to run OOM-aware batch-size probing. The trainer then auto-adjusts `training.accumulate_grad_batches` to reach `training.target_global_batch_size` and scales LR from `optim.base_lr` unless `optim.lr` is set explicitly.
+
+### Local Launcher
 
 ```bash
-sbatch run.sh
+uv run cliffordnet-launch \
+  --launcher local \
+  --config configs/imagenet1k.yaml \
+  --config configs/profiles/stress.yaml \
+  --set data.data_dir=/t1/imagenet1k \
+  --set runtime.devices=8
 ```
 
-Set `--batch-size 0` to auto-detect the largest batch size that fits in GPU memory.
+### Slurm Launcher
+
+Generate and submit a Slurm script:
+
+```bash
+uv run cliffordnet-launch \
+  --launcher slurm \
+  --submit \
+  --config configs/imagenet1k.yaml \
+  --config configs/profiles/stress.yaml \
+  --config configs/profiles/slurm_t1.yaml \
+  --set data.data_dir=/t1/imagenet1k \
+  --set slurm.account=<account> \
+  --set slurm.partition=<partition> \
+  --set slurm.nodes=2 \
+  --set slurm.gpus_per_node=6
+```
+
+`run.sh` is a thin wrapper around the Slurm launcher. `run_training.sh` is a thin wrapper around the local launcher.
+
+### Config Profiles
+
+- `configs/imagenet1k.yaml`: base workload config
+- `configs/profiles/smoke.yaml`: tiny offline smoke run
+- `configs/profiles/probe.yaml`: short probe model run for quick signal
+- `configs/profiles/stress.yaml`: long-running HPC workload profile
+- `configs/profiles/stable_imagenet1k.yaml`: conservative recipe for ImageNet-1k loss-spike experiments
+- `configs/profiles/slurm_t1.yaml`: site-neutral Slurm defaults
+
+### Resume
+
+By default `checkpoint.resume=auto`. The trainer resumes from `last.ckpt` or `preempted.ckpt` under `run.output_dir/run.name/checkpoints` when present. Set a stable `run.name` to resume a local run; the Slurm launcher freezes `run.name` in the generated script automatically. SIGTERM triggers a `preempted.ckpt` save before exit.
+
+### W&B
+
+W&B is online by default. Each run logs the merged config, detected GPU/CPU/Slurm resources, computed batch/accumulation/LR settings, and a `run_manifest.yaml` artifact. Set `wandb.mode=offline` for offline runs.
+
+### Legacy Entrypoint
+
+```bash
+uv run python -m cliffordnet.tasks.imagenet1k --help
+```
+
+The canonical ImageNet-1k task lives at `src/cliffordnet/tasks/imagenet1k.py`. New workloads should use `cliffordnet-train` or `cliffordnet-launch`.
 
 ### GPU Stress Test
 
 ```bash
-bash gpu_stress_test.sh
+bash scripts/gpu_stress_test.sh
 ```
 
 Runs single-GPU tests on each card, then a multi-GPU DDP communication test.
+
+## Repository Layout
+
+- `src/cliffordnet/`: package code and canonical runtime
+- `src/cliffordnet/tasks/imagenet1k.py`: ImageNet-1k model/task implementation for CAN issue-driven model changes
+- `configs/`: base config, workload profiles, and W&B sweeps
+- `experiments/legacy/`: old exploratory scripts kept for reference
+- `experiments/sweeps/`: W&B sweep runner
+- `scripts/`: operational scripts that call the canonical entrypoints
+- `docs/model_development.md`: notes for model-structure and stability experiments
 
 ## Diagnostic Metrics
 

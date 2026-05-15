@@ -1,0 +1,25 @@
+run:
+  profile: probe
+  tags: [probe]
+
+model:
+  size: probe_s
+  diag_log_interval: 200
+
+training:
+  batch_size: 0
+  target_global_batch_size: 1024
+  max_epochs: 10
+  limit_val_batches: 0.2
+
+runtime:
+  auto_batch:
+    enabled: true
+    min_batch_size: 16
+    max_batch_size: 2048
+
+checkpoint:
+  save_top_k: 1
+
+wandb:
+  project: CliffordNet-probe

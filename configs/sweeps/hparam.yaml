@@ -2,7 +2,7 @@
 #
 # Searches the core training hyperparameters on small probe models.
 # Run with:
-#   wandb sweep sweep_hparam.yaml          # prints a sweep ID
+#   wandb sweep configs/sweeps/hparam.yaml # prints a sweep ID
 #   wandb agent <entity>/<project>/<id>    # start one agent per GPU
 #
 # Each run trains for --epochs 30 on probe_xs (206K params) which takes
@@ -10,7 +10,7 @@
 # Transfer: take the best lr / weight_decay and use them directly on
 # production models (probe_s → 12_2 → 32_5).
 
-program: train_sweep.py
+program: src/cliffordnet/sweeps/train_sweep.py
 method: bayes
 
 metric:

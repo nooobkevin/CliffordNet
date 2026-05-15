@@ -274,11 +274,12 @@ wheels = [
 [[package]]
 name = "cliffordnet"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "datasets" },
     { name = "lightning" },
     { name = "matplotlib" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "scikit-learn" },
     { name = "seaborn" },
@@ -294,6 +295,7 @@ requires-dist = [
     { name = "datasets", specifier = ">=3.0.0" },
     { name = "lightning", specifier = ">=2.6.1" },
     { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },

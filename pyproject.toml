@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=3.0.0",
     "lightning>=2.6.1",
     "matplotlib>=3.10.8",
+    "pyyaml>=6.0",
     "rich>=13.0.0",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
@@ -17,3 +18,15 @@ dependencies = [
     "torchvision>=0.25.0",
     "wandb>=0.19.0",
 ]
+
+[project.scripts]
+cliffordnet-train = "cliffordnet.train:main"
+cliffordnet-launch = "cliffordnet.launch:main"
+cliffordnet-sweep = "cliffordnet.sweeps.train_sweep:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

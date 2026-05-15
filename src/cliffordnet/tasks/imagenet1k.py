@@ -1,29 +1,4 @@
-"""
-CliffordNet Multi-Node DDP Training Script for ImageNet-1k
-PyTorch Lightning — NFS data with optional local SSD prefetch (/tmp/$UID)
-
-Launch examples:
-
-  # ── torchrun (2 nodes × 6 GPUs each) ──────────────────────────────
-  # On node 0 (master):
-  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=0 \
-           --master_addr=NODE0_IP --master_port=29500 \
-           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-
-  # On node 1:
-  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=1 \
-           --master_addr=NODE0_IP --master_port=29500 \
-           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-
-  # ── SLURM ─────────────────────────────────────────────────────────
-  #SBATCH --nodes=2
-  #SBATCH --ntasks-per-node=6
-  #SBATCH --gpus-per-node=6
-  srun python train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-       --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-"""
+"""ImageNet-1k CliffordNet model, data module, and legacy CLI entrypoint."""
 
 import wandb
 import seaborn as sns
@@ -44,7 +19,6 @@ import matplotlib.pyplot as plt
 import math
 import os
 import time as _time
-import subprocess
 import argparse
 import torch
 import torch.nn as nn
@@ -55,37 +29,6 @@ import torchvision.transforms as transforms
 import matplotlib
 
 matplotlib.use("Agg")
-
-
-# ============================================================================
-# NFS → Local SSD Prefetch
-# ============================================================================
-
-
-def prefetch_nfs_to_local(nfs_dir, local_dir):
-    """
-    Copy HuggingFace dataset cache from NFS to node-local SSD.
-    Marker file prevents redundant copies on restart.
-    Called only by local-rank-0 on each node (via prepare_data).
-    """
-    marker = os.path.join(local_dir, ".prefetch_complete")
-    if os.path.exists(marker):
-        print(f"[Prefetch] Local cache already present at {local_dir}")
-        return
-
-    os.makedirs(local_dir, exist_ok=True)
-    print(f"[Prefetch] Copying {nfs_dir} → {local_dir}  (may take a while) ...")
-
-    ret = subprocess.run(
-        ["rsync", "-a", "--info=progress2", f"{nfs_dir}/", f"{local_dir}/"]
-    )
-    if ret.returncode != 0:
-        print("[Prefetch] rsync unavailable or failed, falling back to cp -a")
-        subprocess.run(["cp", "-a", f"{nfs_dir}/.", f"{local_dir}/"], check=True)
-
-    with open(marker, "w") as f:
-        f.write("done\n")
-    print("[Prefetch] Complete.")
 
 
 # ============================================================================
@@ -596,11 +539,14 @@ class CliffordNetLightning(L.LightningModule):
         cutmix_alpha=1.0,
         mixup_prob=1.0,
         mixup_switch_prob=0.5,
+        label_smoothing=0.1,
         ema_decay=0.9999,
         wedge_mode="fma",
         ortho_weight=0.01,
         enable_diagnostics=True,
         diag_log_interval=100,
+        warmup_epochs=1,
+        eta_min=1e-6,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -640,7 +586,7 @@ class CliffordNetLightning(L.LightningModule):
             num_classes=num_classes,
         )
         # With mixup, targets become soft labels → use soft cross-entropy
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         # Validation uses un-smoothed loss for accurate confidence measurement
         self.val_criterion = nn.CrossEntropyLoss()
 
@@ -1075,15 +1021,17 @@ class CliffordNetLightning(L.LightningModule):
             lr=self.hparams.learning_rate,
         )
 
-        # Linear warmup for 1 epoch, then cosine decay to eta_min over
+        # Linear warmup, then cosine decay to eta_min over
         # the remaining epochs.  Both schedulers step per-step (not per-epoch)
         # so the curve is smooth.
         # We estimate steps_per_epoch from the trainer if available.
-        steps_per_epoch = (
-            self.trainer.estimated_stepping_batches // self.hparams.max_epochs
+        total_steps = max(1, self.trainer.estimated_stepping_batches)
+        steps_per_epoch = max(
+            1, total_steps // max(1, self.hparams.max_epochs)
         )
-        warmup_steps = 1 * steps_per_epoch
-        total_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = max(1, self.hparams.warmup_epochs * steps_per_epoch)
+        if total_steps > 1:
+            warmup_steps = min(warmup_steps, total_steps - 1)
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
@@ -1093,8 +1041,8 @@ class CliffordNetLightning(L.LightningModule):
         )
         cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=total_steps - warmup_steps,
-            eta_min=1e-6,
+            T_max=max(1, total_steps - warmup_steps),
+            eta_min=self.hparams.eta_min,
         )
         scheduler = torch.optim.lr_scheduler.SequentialLR(
             optimizer,
@@ -1135,37 +1083,19 @@ class ImageNet1kDataModule(L.LightningDataModule):
         nfs_data_dir,
         batch_size,
         num_workers,
-        prefetch_local=False,
-        local_cache_dir=None,
     ):
         super().__init__()
         self.nfs_data_dir = nfs_data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.prefetch_local = prefetch_local
-        self.local_cache_dir = local_cache_dir or os.path.join(
-            "/tmp", str(os.getuid()), "imagenet1k_cache"
-        )
-        # 讓 prepare_data 在每個節點的 local rank 0 各跑一次
         self.prepare_data_per_node = True
 
     def prepare_data(self):
-        """
-        在每個節點的 local rank 0 上執行。
-        1) 確認 NFS 上已有 HF dataset cache（首次會下載）
-        2) 若 --prefetch-local，將 NFS cache 複製到 /tmp/$UID
-        """
+        """Ensure the Hugging Face dataset cache exists on shared storage."""
         load_dataset("ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir)
-        if self.prefetch_local:
-            prefetch_nfs_to_local(self.nfs_data_dir, self.local_cache_dir)
 
     def setup(self, stage=None):
-        """
-        在所有 rank 上執行（Lightning 會在 prepare_data 完成後加 barrier）。
-        """
-        effective_dir = (
-            self.local_cache_dir if self.prefetch_local else self.nfs_data_dir
-        )
+        """Load datasets on every rank after Lightning's prepare_data barrier."""
 
         train_tf = transforms.Compose(
             [
@@ -1187,7 +1117,7 @@ class ImageNet1kDataModule(L.LightningDataModule):
             ]
         )
 
-        ds = load_dataset("ILSVRC/imagenet-1k", cache_dir=effective_dir)
+        ds = load_dataset("ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir)
         self.train_ds = HFImageNetDataset(ds["train"], transform=train_tf)
         self.val_ds = HFImageNetDataset(ds["validation"], transform=val_tf)
 
@@ -1327,7 +1257,7 @@ def main():
         "--data-dir",
         type=str,
         default="./imagenet1k",
-        help="NFS path where HuggingFace caches ImageNet-1k",
+        help="Shared storage path where HuggingFace caches ImageNet-1k",
     )
     parser.add_argument(
         "--model-size",
@@ -1387,18 +1317,6 @@ def main():
     parser.add_argument(
         "--resume", type=str, default=None, help="Checkpoint path to resume from"
     )
-    # ---- Prefetch ----
-    parser.add_argument(
-        "--prefetch-local",
-        action="store_true",
-        help="Copy HF cache from NFS to /tmp/$UID before training",
-    )
-    parser.add_argument(
-        "--local-cache-dir",
-        type=str,
-        default=None,
-        help="Local SSD path for prefetch (default: /tmp/$UID/imagenet_cache)",
-    )
     # ---- Wandb ----
     parser.add_argument(
         "--wandb-project",
@@ -1409,7 +1327,7 @@ def main():
     parser.add_argument(
         "--wandb-entity",
         type=str,
-        default="nooobkevin",
+        default=None,
         help="Wandb entity (team/user name)",
     )
     parser.add_argument(
@@ -1508,8 +1426,6 @@ def main():
         nfs_data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        prefetch_local=args.prefetch_local,
-        local_cache_dir=args.local_cache_dir,
     )
 
     model = CliffordNetLightning(

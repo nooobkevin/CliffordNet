@@ -1,0 +1,47 @@
+run:
+  profile: stress
+  tags: [stress, hpc-workload]
+
+model:
+  size: "12_2"
+  wedge_mode: fma
+  ortho_weight: 0.03
+  enable_diagnostics: true
+  diag_log_interval: 100
+
+recipe:
+  warmup_epochs: 10
+  label_smoothing: 0.1
+  ema_decay: 0.9999
+
+optim:
+  base_lr: 3.0e-4
+  base_global_batch_size: 1024
+  scale_lr: true
+
+training:
+  batch_size: 0
+  target_global_batch_size: 1024
+  max_epochs: 300
+  val_check_interval: 0.25
+  gradient_clip_val: 1.0
+  log_every_n_steps: 10
+
+runtime:
+  auto_batch:
+    enabled: true
+    min_batch_size: 8
+    max_batch_size: 2048
+  oom_retries: 2
+  preemption_checkpoint: true
+
+checkpoint:
+  resume: auto
+  save_top_k: 3
+  save_last: true
+  every_n_train_steps: null
+
+wandb:
+  project: CliffordNet-workload
+  mode: online
+  save_manifest_artifact: true

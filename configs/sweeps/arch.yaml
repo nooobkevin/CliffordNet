@@ -1,6 +1,6 @@
 # W&B Architecture Sweep — CliffordNet
 #
-# After sweep_hparam.yaml identifies the best lr / weight_decay / ortho_weight,
+# After configs/sweeps/hparam.yaml identifies the best lr / weight_decay / ortho_weight,
 # freeze those and search over architectural choices.
 #
 # IMPORTANT: runs in this sweep are NOT comparable on raw val/acc1 — larger
@@ -8,13 +8,13 @@
 # true figure of merit.  W&B parallel-coordinates plot is helpful here.
 #
 # Usage:
-#   wandb sweep sweep_arch.yaml
+#   wandb sweep configs/sweeps/arch.yaml
 #   wandb agent <entity>/<project>/<id>
 #
 # Replace the lr / weight_decay / ortho_weight below with the best values
-# found by sweep_hparam.yaml before launching.
+# found by configs/sweeps/hparam.yaml before launching.
 
-program: train_sweep.py
+program: src/cliffordnet/sweeps/train_sweep.py
 method: grid            # grid is fine — the space is small and discrete
 
 metric:

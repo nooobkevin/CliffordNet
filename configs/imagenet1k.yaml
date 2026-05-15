@@ -1,0 +1,110 @@
+run:
+  profile: imagenet1k
+  name: null
+  output_dir: ./outputs
+  seed: 42
+  tags: [imagenet1k]
+
+data:
+  dataset: imagenet1k
+  dataset_id: ILSVRC/imagenet-1k
+  data_dir: ./imagenet1k
+  num_workers: auto
+  image_size: 224
+  num_classes: 1000
+
+model:
+  size: "12_2"
+  wedge_mode: fma
+  ortho_weight: 0.01
+  enable_diagnostics: true
+  diag_log_interval: 100
+
+recipe:
+  mixup_alpha: 0.8
+  cutmix_alpha: 1.0
+  mixup_prob: 1.0
+  mixup_switch_prob: 0.5
+  label_smoothing: 0.1
+  ema_decay: 0.9999
+  warmup_epochs: 5
+  eta_min: 1.0e-6
+
+optim:
+  lr: null
+  base_lr: 5.0e-4
+  base_global_batch_size: 1024
+  scale_lr: true
+  weight_decay: 0.05
+
+training:
+  batch_size: 0
+  target_global_batch_size: 1024
+  accumulate_grad_batches: 1
+  max_epochs: 300
+  val_check_interval: 0.25
+  gradient_clip_val: 1.0
+  limit_train_batches: null
+  limit_val_batches: null
+  log_every_n_steps: 10
+
+runtime:
+  accelerator: auto
+  devices: auto
+  num_nodes: auto
+  strategy: auto
+  precision: bf16-mixed
+  deterministic: false
+  benchmark: true
+  matmul_precision: high
+  auto_batch:
+    enabled: true
+    min_batch_size: 8
+    max_batch_size: 1024
+  oom_retries: 1
+  preemption_checkpoint: true
+
+checkpoint:
+  resume: auto
+  monitor: val/acc1
+  mode: max
+  save_top_k: 2
+  save_last: true
+  filename: "{epoch}-{val/acc1:.4f}"
+  every_n_train_steps: null
+
+wandb:
+  enabled: true
+  project: CliffordNet
+  entity: null
+  mode: online
+  group: null
+  log_model: false
+  save_manifest_artifact: true
+  tags: []
+
+slurm:
+  account: null
+  partition: null
+  qos: null
+  nodes: 1
+  gpus_per_node: 1
+  gpus_per_task: "1"
+  gpu_type: null
+  cpus_per_task: auto
+  mem_per_gpu: null
+  time: "04:00:00"
+  job_name: null
+  nodelist: null
+  exclude: null
+  constraint: null
+  output: null
+  error: null
+  script_dir: ./outputs/slurm
+  command_prefix: uv run python
+  torchrun_prefix: uv run torchrun
+  use_torchrun: true
+  master_port: 29500
+  srun_args: []
+  extra_directives: []
+  env: {}
