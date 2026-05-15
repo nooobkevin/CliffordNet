@@ -1,5 +1,6 @@
 """ImageNet-1k CliffordNet model, data module, and legacy CLI entrypoint."""
 
+import copy
 import wandb
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
@@ -297,6 +298,16 @@ class CliffordBlock(nn.Module):
         return x
 
 
+def _diagnose_and_step_block(block, x):
+    x_ln = block.norm(x)
+    layer_diags = block.interaction.forward_diagnostics(x_ln)
+    g_feat = block.interaction(x_ln)
+    m = torch.cat([x_ln, g_feat], dim=1)
+    alpha = torch.sigmoid(block.gate_linear(m))
+    h_mix = F.silu(x_ln) + alpha * g_feat
+    return x + block.drop_path(block.gamma * h_mix), layer_diags
+
+
 class CliffordNet(nn.Module):
     def __init__(
         self,
@@ -391,6 +402,222 @@ class CliffordNet(nn.Module):
     def get_interaction_layers(self):
         """Return all CliffordInteraction modules (for diagnostics)."""
         return [block.interaction for block in self.blocks]
+
+    def iter_blocks(self):
+        for idx, block in enumerate(self.blocks):
+            yield f"block_{idx}", block
+
+    def diagnostic_block_labels(self):
+        return [label for label, _block in self.iter_blocks()]
+
+    def forward_diagnostics(self, x):
+        all_diags = {}
+        with torch.no_grad():
+            x = self.stem(x)
+            for label, block in self.iter_blocks():
+                x, layer_diags = _diagnose_and_step_block(block, x)
+                for key, value in layer_diags.items():
+                    all_diags[f"{label}/{key}"] = value
+        return all_diags
+
+
+class HierarchicalStem(nn.Module):
+    def __init__(self, in_chans, embed_dim, patch_size):
+        super().__init__()
+        if patch_size == 4:
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_chans,
+                    embed_dim // 2,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim // 2),
+                nn.SiLU(),
+                nn.Conv2d(
+                    embed_dim // 2,
+                    embed_dim,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim),
+            )
+        elif patch_size == 2:
+            hidden_dim = max(embed_dim // 2, 32)
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_chans,
+                    hidden_dim,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(hidden_dim),
+                nn.SiLU(),
+                nn.Conv2d(
+                    hidden_dim,
+                    embed_dim,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim),
+            )
+        else:
+            raise ValueError("Hierarchical ImageNet stem only supports patch_size 2 or 4.")
+
+    def forward(self, x):
+        return self.proj(x)
+
+
+class ConvStageDownsample(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.pre_norm = nn.BatchNorm2d(in_dim)
+        self.depthwise = nn.Conv2d(
+            in_dim,
+            in_dim,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            groups=in_dim,
+            bias=False,
+        )
+        self.act = nn.SiLU()
+        self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=1, bias=False)
+        self.out_norm = nn.BatchNorm2d(out_dim)
+
+    def forward(self, x):
+        x = self.pre_norm(x)
+        x = self.depthwise(x)
+        x = self.act(x)
+        x = self.proj(x)
+        x = self.out_norm(x)
+        return x
+
+
+class HierarchicalCliffordNet(nn.Module):
+    def __init__(
+        self,
+        num_classes=1000,
+        in_chans=3,
+        patch_size=4,
+        stage_dims=(48, 96, 160, 256),
+        stage_depths=(2, 2, 4, 2),
+        stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+        drop_path_rate=0.20,
+        ctx_mode="diff",
+        wedge_mode="fma",
+    ):
+        super().__init__()
+        if len(stage_dims) != len(stage_depths):
+            raise ValueError("stage_dims and stage_depths must have the same length.")
+        if len(stage_shifts) != len(stage_depths):
+            raise ValueError("stage_shifts and stage_depths must have the same length.")
+
+        self.num_classes = num_classes
+        self.patch_size = patch_size
+        self.stage_dims = tuple(stage_dims)
+        self.stage_depths = tuple(stage_depths)
+        self.stage_shifts = tuple(tuple(s) for s in stage_shifts)
+        self.stem = HierarchicalStem(
+            in_chans=in_chans,
+            embed_dim=stage_dims[0],
+            patch_size=patch_size,
+        )
+
+        total_blocks = sum(stage_depths)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, total_blocks)]
+        self.stages = nn.ModuleList()
+        self.downsamples = nn.ModuleList()
+
+        block_idx = 0
+        for stage_idx, (dim, depth, shifts) in enumerate(
+            zip(stage_dims, stage_depths, stage_shifts)
+        ):
+            blocks = nn.ModuleList(
+                [
+                    CliffordBlock(
+                        dim=dim,
+                        shifts=list(shifts),
+                        drop_path=dpr[block_idx + local_idx],
+                        ctx_mode=ctx_mode,
+                        wedge_mode=wedge_mode,
+                    )
+                    for local_idx in range(depth)
+                ]
+            )
+            block_idx += depth
+            self.stages.append(blocks)
+
+            if stage_idx < len(stage_depths) - 1:
+                self.downsamples.append(
+                    ConvStageDownsample(
+                        in_dim=stage_dims[stage_idx],
+                        out_dim=stage_dims[stage_idx + 1],
+                    )
+                )
+
+        self.norm = nn.LayerNorm(stage_dims[-1])
+        self.head = nn.Linear(stage_dims[-1], num_classes)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def iter_blocks(self):
+        for stage_idx, stage in enumerate(self.stages):
+            for block_idx, block in enumerate(stage):
+                yield f"stage_{stage_idx}_block_{block_idx}", block
+
+    def diagnostic_block_labels(self):
+        return [label for label, _block in self.iter_blocks()]
+
+    def forward_diagnostics(self, x):
+        all_diags = {}
+        with torch.no_grad():
+            x = self.stem(x)
+            for stage_idx, stage in enumerate(self.stages):
+                for block_idx, block in enumerate(stage):
+                    label = f"stage_{stage_idx}_block_{block_idx}"
+                    x, layer_diags = _diagnose_and_step_block(block, x)
+                    for key, value in layer_diags.items():
+                        all_diags[f"{label}/{key}"] = value
+                if stage_idx < len(self.downsamples):
+                    x = self.downsamples[stage_idx](x)
+        return all_diags
+
+    def forward(self, x, compute_ortho=False):
+        x = self.stem(x)
+        ortho_losses = []
+        for stage_idx, stage in enumerate(self.stages):
+            for block in stage:
+                if compute_ortho:
+                    x, ortho_loss = block(x, compute_ortho=True)
+                    ortho_losses.append(ortho_loss)
+                else:
+                    x = block(x)
+            if stage_idx < len(self.downsamples):
+                x = self.downsamples[stage_idx](x)
+
+        x = x.mean(dim=[-2, -1])
+        x = self.norm(x)
+        logits = self.head(x)
+        if compute_ortho:
+            return logits, torch.stack(ortho_losses).mean()
+        return logits
 
 
 # ============================================================================
@@ -522,6 +749,52 @@ def cliffordnet_64_5(num_classes=1000, wedge_mode="fma"):
     )
 
 
+def hier_cliffordnet_p4(num_classes=1000, wedge_mode="fma"):
+    """Hierarchical 224 -> 56 -> 28 -> 14 -> 7 ImageNet backbone."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=4,
+        stage_dims=(48, 96, 160, 256),
+        stage_depths=(2, 2, 4, 2),
+        stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+        drop_path_rate=0.20,
+        wedge_mode=wedge_mode,
+    )
+
+
+def hier_cliffordnet_p2(num_classes=1000, wedge_mode="fma"):
+    """Hierarchical 224 -> 112 -> 56 -> 28 -> 14 -> 7 ImageNet backbone."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=2,
+        stage_dims=(32, 64, 96, 160, 256),
+        stage_depths=(1, 2, 2, 4, 2),
+        stage_shifts=((1,), (1,), (1,), (1, 2), (1, 2)),
+        drop_path_rate=0.15,
+        wedge_mode=wedge_mode,
+    )
+
+
+MODEL_BUILDERS = {
+    # Probe models (hyperparam search)
+    "probe_xs": cliffordnet_probe_xs,
+    "probe_s": cliffordnet_probe_s,
+    # Production single-stage models (author-aligned: depth scaling, dim=128)
+    "12_2": cliffordnet_12_2,
+    "12_5": cliffordnet_12_5,
+    "18_5": cliffordnet_18_5,
+    "32_3": cliffordnet_32_3,
+    "32_5": cliffordnet_32_5,
+    "64_5": cliffordnet_64_5,
+    # ImageNet-oriented hierarchical variants suggested in CAN issue #5
+    "hier_p4": hier_cliffordnet_p4,
+    "hier_p2": hier_cliffordnet_p2,
+}
+
+
+MODEL_SIZE_CHOICES = tuple(MODEL_BUILDERS)
+
+
 # ============================================================================
 # Lightning Module
 # ============================================================================
@@ -551,23 +824,9 @@ class CliffordNetLightning(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        model_builders = {
-            # Probe models (hyperparam search)
-            "probe_xs": cliffordnet_probe_xs,
-            "probe_s": cliffordnet_probe_s,
-            # Production models (author-aligned: depth scaling, dim=128)
-            "12_2": cliffordnet_12_2,
-            "12_5": cliffordnet_12_5,
-            "18_5": cliffordnet_18_5,
-            "32_3": cliffordnet_32_3,
-            "32_5": cliffordnet_32_5,
-            "64_5": cliffordnet_64_5,
-        }
-
-        # Build the raw (un-compiled) model — keep a reference for:
-        #   - EMA state_dict / load_state_dict (W1: avoids torch.compile wrapper)
-        #   - Diagnostic forward (C3: no graph breaks)
-        self._raw_model = model_builders[model_size](
+        # Build an uncompiled training model for checkpointing/diagnostics, then
+        # compile only the training path. EMA validation uses a separate module.
+        self._raw_model = MODEL_BUILDERS[model_size](
             num_classes=num_classes,
             wedge_mode=wedge_mode,
         )
@@ -590,9 +849,13 @@ class CliffordNetLightning(L.LightningModule):
         # Validation uses un-smoothed loss for accurate confidence measurement
         self.val_criterion = nn.CrossEntropyLoss()
 
-        # EMA model (updated manually in on_train_batch_end)
+        # EMA validation model is intentionally separate and uncompiled. Do not
+        # swap EMA weights into the training model; state_dict tensors may share
+        # storage with compiled model params and cause validation-aligned spikes.
         self.ema_decay = ema_decay
-        self._ema_model = None  # lazily initialized on first step
+        self._ema_model = copy.deepcopy(self._raw_model)
+        self._ema_model.requires_grad_(False)
+        self._ema_model.eval()
 
         self.register_buffer(
             "inv_mean", torch.tensor(IMAGENET_DEFAULT_MEAN).view(1, 3, 1, 1)
@@ -680,22 +943,7 @@ class CliffordNetLightning(L.LightningModule):
         diag_bs = min(4, images.shape[0])
         images = images[:diag_bs]
 
-        # Run diagnostic forward on each interaction layer using the raw model
-        # which shares weights with the compiled model.
-        all_diags = {}
-        with torch.no_grad():
-            x = self._raw_model.stem(images)
-            for i, block in enumerate(self._raw_model.blocks):
-                x_ln = block.norm(x)
-                layer_diags = block.interaction.forward_diagnostics(x_ln)
-                for k, v in layer_diags.items():
-                    all_diags[f"block_{i}/{k}"] = v
-                # Continue the forward pass for subsequent blocks
-                g_feat = block.interaction(x_ln)
-                m = torch.cat([x_ln, g_feat], dim=1)
-                alpha = torch.sigmoid(block.gate_linear(m))
-                h_mix = F.silu(x_ln) + alpha * g_feat
-                x = x + block.drop_path(block.gamma * h_mix)
+        all_diags = self._raw_model.forward_diagnostics(images)
 
         # Log summary across all blocks (mean of per-block values)
         summary_keys = [
@@ -720,18 +968,19 @@ class CliffordNetLightning(L.LightningModule):
                 )
 
         # Log per-block detail for first, middle, last block
-        n_blocks = len(self._raw_model.blocks)
-        sample_blocks = sorted(set([0, n_blocks // 2, n_blocks - 1]))
-        for bi in sample_blocks:
+        block_labels = self._raw_model.diagnostic_block_labels()
+        sample_indices = sorted(set([0, len(block_labels) // 2, len(block_labels) - 1]))
+        for sample_idx in sample_indices:
+            label = block_labels[sample_idx]
             for sk in [
                 "cancel/rel_diff_mean",
                 "magnitude/wedge_abs_mean",
                 "ortho/cos_sim_mean",
             ]:
-                key = f"block_{bi}/{sk}"
+                key = f"{label}/{sk}"
                 if key in all_diags:
                     self.log(
-                        f"diag/block_{bi}/{sk}",
+                        f"diag/{label}/{sk}",
                         all_diags[key],
                         prog_bar=False,
                         sync_dist=False,
@@ -750,25 +999,27 @@ class CliffordNetLightning(L.LightningModule):
             self._log_grad_norms()
 
     def _init_ema(self):
-        """Lazily create EMA state dicts (avoids doubling memory at init)."""
-        if self._ema_model is not None:
-            return
-        # W1 fix: use _raw_model for state_dict to bypass torch.compile wrapper
-        self._ema_model = {
-            k: v.clone().detach() for k, v in self._raw_model.state_dict().items()
-        }
+        """Ensure the separate uncompiled EMA model is on the active device."""
+        self._ema_model.eval()
+        self._ema_model.to(device=self.device, memory_format=torch.channels_last)
 
     def _update_ema(self):
         self._init_ema()
         d = self.ema_decay
-        # W1 fix: use _raw_model for state_dict (no recompilation overhead)
-        model_sd = self._raw_model.state_dict()
-        for k in self._ema_model:
-            v = model_sd[k].detach()
-            if v.is_floating_point():
-                self._ema_model[k].lerp_(v, 1 - d)
-            else:
-                self._ema_model[k].copy_(v)
+        with torch.no_grad():
+            for ema_param, model_param in zip(
+                self._ema_model.parameters(), self._raw_model.parameters()
+            ):
+                ema_param.mul_(d).add_(model_param.detach(), alpha=1 - d)
+            for ema_buffer, model_buffer in zip(
+                self._ema_model.buffers(), self._raw_model.buffers()
+            ):
+                ema_buffer.copy_(model_buffer.detach())
+
+    def _validation_model(self):
+        self._init_ema()
+        self._ema_model.eval()
+        return self._ema_model
 
     def _build_grad_param_groups(self):
         """W2 fix: cache parameter groups once to avoid re-iterating named_parameters."""
@@ -825,28 +1076,10 @@ class CliffordNetLightning(L.LightningModule):
                 sync_dist=False,
             )
 
-    def _swap_ema(self):
-        """Swap model weights with EMA weights (call before/after val).
-        W1 fix: operates on _raw_model to avoid torch.compile recompilation."""
-        if self._ema_model is None:
-            return
-        model_sd = self._raw_model.state_dict()
-        for k in self._ema_model:
-            model_sd[k], self._ema_model[k] = (
-                self._ema_model[k],
-                model_sd[k],
-            )
-        self._raw_model.load_state_dict(model_sd)
-
-    def on_validation_start(self):
-        self._swap_ema()  # use EMA weights for validation
-
-    def on_validation_end(self):
-        self._swap_ema()  # swap back to training weights
-
     def validation_step(self, batch, batch_idx):
         images, labels = batch
-        outputs = self(images)
+        x_cl = images.contiguous(memory_format=torch.channels_last)
+        outputs = self._validation_model()(x_cl)
         loss = self.val_criterion(outputs, labels)
 
         acc1, acc5 = self._accuracy(outputs, labels, topk=(1, 5))
@@ -1005,7 +1238,7 @@ class CliffordNetLightning(L.LightningModule):
         # Separate params: no weight decay for norm layers, biases, and layer scale
         decay_params = []
         no_decay_params = []
-        for name, param in self.named_parameters():
+        for name, param in self._raw_model.named_parameters():
             if not param.requires_grad:
                 continue
             if param.ndim <= 1 or "bias" in name or "norm" in name or "gamma" in name:
@@ -1263,10 +1496,11 @@ def main():
         "--model-size",
         type=str,
         default="12_2",
-        choices=["probe_xs", "probe_s", "12_2", "12_5", "18_5", "32_3", "32_5", "64_5"],
+        choices=MODEL_SIZE_CHOICES,
         help="Model size variant. "
         "'probe_*' = tiny models for fast hyperparam sweeps. "
-        "'{depth}_{shifts}' = author-aligned configs (dim=128, scale by depth).",
+        "'{depth}_{shifts}' = single-stage configs. "
+        "'hier_*' = pyramidal ImageNet configs.",
     )
     parser.add_argument(
         "--batch-size",
@@ -1506,12 +1740,30 @@ def _model_kwargs_for_size(size):
         "32_3": dict(embed_dim=128, depth=32, shifts=shifts(3), drop_path_rate=0.3),
         "32_5": dict(embed_dim=128, depth=32, shifts=shifts(5), drop_path_rate=0.3),
         "64_5": dict(embed_dim=128, depth=64, shifts=shifts(5), drop_path_rate=0.4),
+        # Hierarchical ImageNet variants
+        "hier_p4": dict(
+            patch_size=4,
+            stage_dims=(48, 96, 160, 256),
+            stage_depths=(2, 2, 4, 2),
+            stage_shifts=((1,), (1,), (1, 2), (1, 2)),
+            drop_path_rate=0.20,
+        ),
+        "hier_p2": dict(
+            patch_size=2,
+            stage_dims=(32, 64, 96, 160, 256),
+            stage_depths=(1, 2, 2, 4, 2),
+            stage_shifts=((1,), (1,), (1,), (1, 2), (1, 2)),
+            drop_path_rate=0.15,
+        ),
     }
     kwargs = configs[size]
     kwargs["num_classes"] = 1000
-    kwargs["img_size"] = 224
     kwargs["in_chans"] = 3
     return kwargs
+
+
+def model_cls_for_size(size):
+    return HierarchicalCliffordNet if size.startswith("hier_") else CliffordNet
 
 
 if __name__ == "__main__":

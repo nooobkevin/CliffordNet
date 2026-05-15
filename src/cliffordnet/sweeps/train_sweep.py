@@ -22,6 +22,10 @@ if __package__ in {None, ""}:
 from cliffordnet.tasks.imagenet1k import (
     CliffordNetLightning,
     ImageNet1kDataModule,
+    MODEL_SIZE_CHOICES,
+    _model_kwargs_for_size,
+    auto_find_batch_size,
+    model_cls_for_size,
 )
 
 
@@ -37,11 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--model-size",
         type=str,
         default="probe_xs",
-        choices=["probe_xs", "probe_s", "12_2", "12_5", "18_5", "32_3", "32_5", "64_5"],
+        choices=MODEL_SIZE_CHOICES,
     )
     p.add_argument("--wedge-mode", type=str, default="fma", choices=["naive", "fp32", "fma"])
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--auto-batch-max", type=int, default=2048)
     p.add_argument("--lr", type=float, default=5e-4)
     p.add_argument("--weight-decay", type=float, default=0.05)
     p.add_argument("--gradient-clip-val", type=float, default=1.0)
@@ -76,6 +81,7 @@ def merge_wandb_config(args: argparse.Namespace) -> argparse.Namespace:
         "model_size": "model_size",
         "epochs": "epochs",
         "batch_size": "batch_size",
+        "auto_batch_max": "auto_batch_max",
         "num_workers": "num_workers",
         "wedge_mode": "wedge_mode",
     }
@@ -96,9 +102,10 @@ class CliffordNetSweep(CliffordNetLightning):
         from timm.layers import DropPath
         import torch.nn as nn
 
-        n_blocks = len(self._raw_model.blocks)
+        block_refs = list(self._raw_model.iter_blocks())
+        n_blocks = len(block_refs)
         dpr = torch.linspace(0, rate, n_blocks).tolist()
-        for i, block in enumerate(self._raw_model.blocks):
+        for i, (_label, block) in enumerate(block_refs):
             block.drop_path = DropPath(dpr[i]) if dpr[i] > 0.0 else nn.Identity()
         print(f"[sweep] drop_path_rate patched to {rate:.3f} ({n_blocks} blocks)")
 
@@ -112,6 +119,17 @@ def train(args: argparse.Namespace):
     os.makedirs(args.output_dir, exist_ok=True)
     run_id = wandb.run.id if wandb.run else f"manual_{int(time.time())}"
     run_dir = os.path.join(args.output_dir, run_id)
+
+    if args.batch_size <= 0:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        args.batch_size = auto_find_batch_size(
+            model_cls=model_cls_for_size(args.model_size),
+            model_kwargs=_model_kwargs_for_size(args.model_size),
+            max_batch_size=args.auto_batch_max,
+            device=device,
+        )
+        wandb.config.update({"detected_batch_size": args.batch_size}, allow_val_change=True)
+        print(f"[sweep] auto batch_size = {args.batch_size}")
 
     data = ImageNet1kDataModule(
         nfs_data_dir=args.data_dir,

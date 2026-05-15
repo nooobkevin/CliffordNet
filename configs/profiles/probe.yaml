@@ -3,7 +3,7 @@ run:
   tags: [probe]
 
 model:
-  size: probe_s
+  size: hier_p4
   diag_log_interval: 200
 
 training:

@@ -24,13 +24,15 @@ metric:
 parameters:
   # ── Architecture axes ────────────────────────────────────────────────
   model_size:
-    # Covers: probe_xs(206K), probe_s(652K), 12_2(tiny), 12_5(lite)
+    # Covers cheap single-stage probes and ImageNet-oriented hierarchical variants.
     # Omit deeper/wider models — they take too long for a sweep run.
     values:
       - probe_xs
       - probe_s
       - 12_2
       - 12_5
+      - hier_p4
+      - hier_p2
 
   # ── Best hparams from sweep_hparam (fill in after that sweep) ────────
   lr:

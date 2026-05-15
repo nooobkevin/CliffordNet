@@ -25,11 +25,11 @@ from cliffordnet.resources import (
     world_size,
 )
 from cliffordnet.tasks.imagenet1k import (
-    CliffordNet,
     CliffordNetLightning,
     ImageNet1kDataModule,
     _model_kwargs_for_size,
     auto_find_batch_size,
+    model_cls_for_size,
 )
 
 
@@ -207,7 +207,7 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
             f"cuda:{local_rank()}" if torch.cuda.is_available() else "cpu"
         )
         detected = auto_find_batch_size(
-            model_cls=CliffordNet,
+            model_cls=model_cls_for_size(config.model.size),
             model_kwargs=_model_kwargs_for_size(config.model.size),
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,
@@ -246,7 +246,7 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
             f"cuda:{local_rank()}" if torch.cuda.is_available() else "cpu"
         )
         detected = auto_find_batch_size(
-            model_cls=CliffordNet,
+            model_cls=model_cls_for_size(config.model.size),
             model_kwargs=_model_kwargs_for_size(config.model.size),
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,

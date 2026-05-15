@@ -50,13 +50,16 @@ parameters:
     value: 1.0
 
   model_size:
-    value: probe_xs          # 206K params — fast iteration
+    value: hier_p4           # ImageNet-oriented pyramidal backbone
 
   epochs:
     value: 10                # short runs — 10 epochs is enough for LR / ortho signal
 
   batch_size:
-    value: 2560              # ~80GB VRAM, push utilization close to limit
+    value: 0                 # auto-detect per GPU to avoid OOM during acceptance runs
+
+  auto_batch_max:
+    value: 2048
 
   num_workers:
     value: 8

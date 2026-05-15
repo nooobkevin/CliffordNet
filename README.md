@@ -107,6 +107,7 @@ Runs single-GPU tests on each card, then a multi-GPU DDP communication test.
 - `experiments/sweeps/`: W&B sweep runner
 - `scripts/`: operational scripts that call the canonical entrypoints
 - `docs/model_development.md`: notes for model-structure and stability experiments
+- `docs/h800_acceptance.md`: direct, Slurm, and sweep commands for H800 node acceptance
 
 ## Diagnostic Metrics
 
