@@ -77,6 +77,7 @@ class AutoBatchConfig:
     enabled: bool = True
     min_batch_size: int = 8
     max_batch_size: int = 1024
+    safety_factor: float = 0.92
 
 
 @dataclass

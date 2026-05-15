@@ -1467,6 +1467,7 @@ def auto_find_batch_size(
     model_kwargs,
     max_batch_size=1024,
     min_batch_size=8,
+    safety_factor=0.92,
     input_shape=(3, 224, 224),
     dtype=torch.bfloat16,
     device=None,
@@ -1523,10 +1524,18 @@ def auto_find_batch_size(
     best = min_batch_size
     lo, hi = min_batch_size, max_batch_size
 
+    def _is_oom(exc):
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+        text = str(exc).lower()
+        return "out of memory" in text or "cuda oom" in text or "cublas_status_alloc_failed" in text
+
     while lo <= hi:
         mid = (lo + hi) // 2
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        x = y = out = loss = None
         try:
             x = torch.randn(mid, *input_shape, device=device, dtype=dtype).contiguous(
                 memory_format=torch.channels_last
@@ -1543,21 +1552,35 @@ def auto_find_batch_size(
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+            peak_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
             del x, y, out, loss
             torch.cuda.empty_cache()
             best = mid
             lo = mid + 1
-        except (torch.cuda.OutOfMemoryError, RuntimeError):
+            print(f"[AutoBS] batch={mid} ok, peak_alloc={peak_mb:.0f} MiB")
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+            del x, y, out, loss
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
-            hi = mid - 1
+            if _is_oom(exc):
+                hi = mid - 1
+            else:
+                print(f"[AutoBS] batch={mid} FAILED with non-OOM error: {exc}")
+                hi = mid - 1
 
     del model, criterion, optimizer
     torch.cuda.empty_cache()
 
+    allocated_mb = torch.cuda.memory_allocated(device) / (1024**2)
+    reserved_mb = torch.cuda.memory_reserved(device) / (1024**2)
+    total_mb = torch.cuda.get_device_properties(device).total_memory / (1024**2)
+    print(
+        f"[AutoBS] Max fit: {best}, peak_alloc={torch.cuda.max_memory_allocated(device)/(1024**2):.0f} MiB"
+    )
+
     # Round down to nearest multiple of 8 for tensor-core efficiency
-    safe_bs = max(min_batch_size, ((int(best * 0.85)) // 8) * 8)
-    print(f"[AutoBS] Max fit: {best}, using batch size: {safe_bs}")
+    safe_bs = max(min_batch_size, ((int(best * safety_factor)) // 8) * 8)
+    print(f"[AutoBS] safety_factor={safety_factor}, using batch size: {safe_bs}")
     return safe_bs
 
 

@@ -211,6 +211,7 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
             model_kwargs=_model_kwargs_for_size(config.model.size),
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,
+            safety_factor=config.runtime.auto_batch.safety_factor,
             device=device,
         )
         candidate_file.write_text(str(detected), encoding="utf-8")
@@ -250,6 +251,7 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
             model_kwargs=_model_kwargs_for_size(config.model.size),
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,
+            safety_factor=config.runtime.auto_batch.safety_factor,
             device=device,
         )
         sync_file.write_text(str(detected), encoding="utf-8")
