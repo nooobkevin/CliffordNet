@@ -1,0 +1,14 @@
+run:
+  tags: [slurm, t1]
+
+runtime:
+  devices: auto
+  num_nodes: auto
+
+slurm:
+  nodes: 1
+  gpus_per_node: 1
+  gpus_per_task: "1"
+  cpus_per_task: 8
+  time: "04:00:00"
+  script_dir: ./outputs/slurm

@@ -1,0 +1,24 @@
+run:
+  profile: smoke
+  tags: [smoke]
+
+model:
+  size: probe_xs
+  enable_diagnostics: false
+
+training:
+  batch_size: 8
+  target_global_batch_size: null
+  max_epochs: 1
+  limit_train_batches: 4
+  limit_val_batches: 2
+  val_check_interval: 1.0
+
+runtime:
+  auto_batch:
+    enabled: false
+  oom_retries: 0
+
+wandb:
+  mode: offline
+  log_model: false

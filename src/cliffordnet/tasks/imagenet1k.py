@@ -1,30 +1,6 @@
-"""
-CliffordNet Multi-Node DDP Training Script for ImageNet-1k
-PyTorch Lightning — NFS data with optional local SSD prefetch (/tmp/$UID)
+"""ImageNet-1k CliffordNet model, data module, and legacy CLI entrypoint."""
 
-Launch examples:
-
-  # ── torchrun (2 nodes × 6 GPUs each) ──────────────────────────────
-  # On node 0 (master):
-  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=0 \
-           --master_addr=NODE0_IP --master_port=29500 \
-           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-
-  # On node 1:
-  torchrun --nnodes=2 --nproc_per_node=6 --node_rank=1 \
-           --master_addr=NODE0_IP --master_port=29500 \
-           train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-                    --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-
-  # ── SLURM ─────────────────────────────────────────────────────────
-  #SBATCH --nodes=2
-  #SBATCH --ntasks-per-node=6
-  #SBATCH --gpus-per-node=6
-  srun python train.py --num-nodes 2 --num-gpus 6 --prefetch-local \
-       --data-dir /nfs/imagenet1k --output-dir /nfs/outputs
-"""
-
+import copy
 import wandb
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
@@ -44,7 +20,6 @@ import matplotlib.pyplot as plt
 import math
 import os
 import time as _time
-import subprocess
 import argparse
 import torch
 import torch.nn as nn
@@ -55,37 +30,6 @@ import torchvision.transforms as transforms
 import matplotlib
 
 matplotlib.use("Agg")
-
-
-# ============================================================================
-# NFS → Local SSD Prefetch
-# ============================================================================
-
-
-def prefetch_nfs_to_local(nfs_dir, local_dir):
-    """
-    Copy HuggingFace dataset cache from NFS to node-local SSD.
-    Marker file prevents redundant copies on restart.
-    Called only by local-rank-0 on each node (via prepare_data).
-    """
-    marker = os.path.join(local_dir, ".prefetch_complete")
-    if os.path.exists(marker):
-        print(f"[Prefetch] Local cache already present at {local_dir}")
-        return
-
-    os.makedirs(local_dir, exist_ok=True)
-    print(f"[Prefetch] Copying {nfs_dir} → {local_dir}  (may take a while) ...")
-
-    ret = subprocess.run(
-        ["rsync", "-a", "--info=progress2", f"{nfs_dir}/", f"{local_dir}/"]
-    )
-    if ret.returncode != 0:
-        print("[Prefetch] rsync unavailable or failed, falling back to cp -a")
-        subprocess.run(["cp", "-a", f"{nfs_dir}/.", f"{local_dir}/"], check=True)
-
-    with open(marker, "w") as f:
-        f.write("done\n")
-    print("[Prefetch] Complete.")
 
 
 # ============================================================================
@@ -354,6 +298,16 @@ class CliffordBlock(nn.Module):
         return x
 
 
+def _diagnose_and_step_block(block, x):
+    x_ln = block.norm(x)
+    layer_diags = block.interaction.forward_diagnostics(x_ln)
+    g_feat = block.interaction(x_ln)
+    m = torch.cat([x_ln, g_feat], dim=1)
+    alpha = torch.sigmoid(block.gate_linear(m))
+    h_mix = F.silu(x_ln) + alpha * g_feat
+    return x + block.drop_path(block.gamma * h_mix), layer_diags
+
+
 class CliffordNet(nn.Module):
     def __init__(
         self,
@@ -448,6 +402,280 @@ class CliffordNet(nn.Module):
     def get_interaction_layers(self):
         """Return all CliffordInteraction modules (for diagnostics)."""
         return [block.interaction for block in self.blocks]
+
+    def iter_blocks(self):
+        for idx, block in enumerate(self.blocks):
+            yield f"block_{idx}", block
+
+    def diagnostic_block_labels(self):
+        return [label for label, _block in self.iter_blocks()]
+
+    def forward_diagnostics(self, x):
+        all_diags = {}
+        with torch.no_grad():
+            x = self.stem(x)
+            for label, block in self.iter_blocks():
+                x, layer_diags = _diagnose_and_step_block(block, x)
+                for key, value in layer_diags.items():
+                    all_diags[f"{label}/{key}"] = value
+        return all_diags
+
+
+class GeometricStem(nn.Module):
+    def __init__(self, in_chans=3, embed_dim=128, patch_size=4):
+        super().__init__()
+        if patch_size == 1:
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_chans,
+                    embed_dim // 2,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim // 2),
+                nn.SiLU(),
+                nn.Conv2d(
+                    embed_dim // 2,
+                    embed_dim,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False,
+                ),
+            )
+        elif patch_size == 2:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            )
+        elif patch_size == 4:
+            self.proj = nn.Sequential(
+                nn.Conv2d(
+                    in_chans,
+                    embed_dim // 2,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(embed_dim // 2),
+                nn.SiLU(),
+                nn.Conv2d(
+                    embed_dim // 2,
+                    embed_dim,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False,
+                ),
+            )
+        else:
+            self.proj = nn.Conv2d(
+                in_chans,
+                embed_dim,
+                kernel_size=patch_size,
+                stride=patch_size,
+            )
+        self.norm = nn.BatchNorm2d(embed_dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        x = self.norm(x)
+        return x
+
+
+class StageDownsample(nn.Module):
+    def __init__(self, in_dim, out_dim, mode="avgpool"):
+        super().__init__()
+        if mode == "avgpool":
+            self.down = nn.AvgPool2d(kernel_size=2, stride=2)
+            self.proj = (
+                nn.Conv2d(in_dim, out_dim, kernel_size=1)
+                if in_dim != out_dim
+                else nn.Identity()
+            )
+        elif mode == "conv":
+            self.down = nn.Sequential(
+                nn.Conv2d(
+                    in_dim,
+                    in_dim,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    groups=in_dim,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(in_dim),
+                nn.SiLU(),
+            )
+            self.proj = (
+                nn.Conv2d(in_dim, out_dim, kernel_size=1)
+                if in_dim != out_dim
+                else nn.Identity()
+            )
+        elif mode == "patch":
+            self.down = nn.Identity()
+            self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=2, stride=2)
+        else:
+            raise ValueError(f"Invalid downsample mode: {mode}")
+
+    def forward(self, x):
+        x = self.down(x)
+        x = self.proj(x)
+        return x
+
+
+class HierarchicalCliffordNet(nn.Module):
+    def __init__(
+        self,
+        num_classes=1000,
+        in_chans=3,
+        patch_size=4,
+        embed_dim=48,
+        shifts=(1, 2),
+        stage_depths=(2, 2, 4, 2),
+        stage_dims=None,
+        dim_policy="double",
+        downsample_mode="conv",
+        drop_path_rate=0.20,
+        ctx_mode="diff",
+        wedge_mode="fma",
+    ):
+        super().__init__()
+        if len(stage_depths) == 0:
+            raise ValueError("stage_depths must not be empty")
+
+        if stage_dims is None:
+            if dim_policy == "double":
+                stage_dims = [embed_dim * (2**i) for i in range(len(stage_depths))]
+            elif dim_policy == "constant":
+                stage_dims = [embed_dim for _ in stage_depths]
+            else:
+                raise ValueError(f"Invalid dim_policy: {dim_policy}")
+        else:
+            if len(stage_dims) != len(stage_depths):
+                raise ValueError("stage_dims must have the same length as stage_depths")
+            stage_dims = list(stage_dims)
+
+        self.num_classes = num_classes
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
+        self.shifts = tuple(shifts)
+        self.stage_depths = list(stage_depths)
+        self.stage_dims = stage_dims
+        self.downsample_mode = downsample_mode
+        self.patch_embed = GeometricStem(
+            in_chans=in_chans,
+            embed_dim=embed_dim,
+            patch_size=patch_size,
+        )
+        self.stem_proj = (
+            nn.Conv2d(embed_dim, stage_dims[0], kernel_size=1)
+            if embed_dim != stage_dims[0]
+            else nn.Identity()
+        )
+
+        total_blocks = sum(stage_depths)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, total_blocks)]
+        self.stages = nn.ModuleList()
+        self.downsamples = nn.ModuleList()
+
+        block_idx = 0
+        for stage_idx, (depth, dim) in enumerate(zip(stage_depths, stage_dims)):
+            blocks = []
+            for _ in range(depth):
+                blocks.append(
+                    CliffordBlock(
+                        dim=dim,
+                        shifts=list(self.shifts),
+                        drop_path=dpr[block_idx],
+                        ctx_mode=ctx_mode,
+                        wedge_mode=wedge_mode,
+                    )
+                )
+                block_idx += 1
+            self.stages.append(nn.Sequential(*blocks))
+
+            if stage_idx < len(stage_depths) - 1:
+                self.downsamples.append(
+                    StageDownsample(
+                        in_dim=stage_dims[stage_idx],
+                        out_dim=stage_dims[stage_idx + 1],
+                        mode=downsample_mode,
+                    )
+                )
+
+        self.norm = nn.LayerNorm(stage_dims[-1])
+        self.head = nn.Linear(stage_dims[-1], num_classes)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def iter_blocks(self):
+        for stage_idx, stage in enumerate(self.stages):
+            for block_idx, block in enumerate(stage):
+                yield f"stage_{stage_idx}_block_{block_idx}", block
+
+    def diagnostic_block_labels(self):
+        return [label for label, _block in self.iter_blocks()]
+
+    def forward_features(self, x):
+        x = self.patch_embed(x)
+        x = self.stem_proj(x)
+        for stage_idx, stage in enumerate(self.stages):
+            x = stage(x)
+            if stage_idx < len(self.downsamples):
+                x = self.downsamples[stage_idx](x)
+        return x
+
+    def forward_diagnostics(self, x):
+        all_diags = {}
+        with torch.no_grad():
+            x = self.patch_embed(x)
+            x = self.stem_proj(x)
+            for stage_idx, stage in enumerate(self.stages):
+                for block_idx, block in enumerate(stage):
+                    label = f"stage_{stage_idx}_block_{block_idx}"
+                    x, layer_diags = _diagnose_and_step_block(block, x)
+                    for key, value in layer_diags.items():
+                        all_diags[f"{label}/{key}"] = value
+                if stage_idx < len(self.downsamples):
+                    x = self.downsamples[stage_idx](x)
+        return all_diags
+
+    def forward(self, x, compute_ortho=False):
+        if compute_ortho:
+            x = self.patch_embed(x)
+            x = self.stem_proj(x)
+            ortho_losses = []
+            for stage_idx, stage in enumerate(self.stages):
+                for block in stage:
+                    x, ortho_loss = block(x, compute_ortho=True)
+                    ortho_losses.append(ortho_loss)
+                if stage_idx < len(self.downsamples):
+                    x = self.downsamples[stage_idx](x)
+        else:
+            x = self.forward_features(x)
+            ortho_losses = None
+
+        x = x.mean(dim=[-2, -1])
+        x = self.norm(x)
+        logits = self.head(x)
+        if compute_ortho:
+            return logits, torch.stack(ortho_losses).mean()
+        return logits
 
 
 # ============================================================================
@@ -579,6 +807,73 @@ def cliffordnet_64_5(num_classes=1000, wedge_mode="fma"):
     )
 
 
+def hier_cliffordnet_p4(num_classes=1000, wedge_mode="fma"):
+    """CAN-style hierarchical backbone with patch-4 ImageNet stem."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=4,
+        embed_dim=48,
+        stage_dims=(48, 96, 160, 256),
+        stage_depths=(2, 2, 4, 2),
+        shifts=(1, 2),
+        downsample_mode="conv",
+        drop_path_rate=0.20,
+        wedge_mode=wedge_mode,
+    )
+
+
+def hier_cliffordnet_p2(num_classes=1000, wedge_mode="fma"):
+    """CAN-style hierarchical backbone with patch-2 ImageNet stem."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=2,
+        embed_dim=32,
+        stage_dims=(32, 64, 96, 160, 256),
+        stage_depths=(1, 2, 2, 4, 2),
+        shifts=(1, 2),
+        downsample_mode="conv",
+        drop_path_rate=0.15,
+        wedge_mode=wedge_mode,
+    )
+
+
+def hier_cliffordnet_can_tiny(num_classes=1000, wedge_mode="fma"):
+    """Closest ImageNet-oriented port of CAN model_hier defaults."""
+    return HierarchicalCliffordNet(
+        num_classes=num_classes,
+        patch_size=4,
+        embed_dim=32,
+        stage_depths=(3, 4, 5),
+        stage_dims=None,
+        dim_policy="double",
+        shifts=(1, 2),
+        downsample_mode="conv",
+        drop_path_rate=0.10,
+        wedge_mode=wedge_mode,
+    )
+
+
+MODEL_BUILDERS = {
+    # Probe models (hyperparam search)
+    "probe_xs": cliffordnet_probe_xs,
+    "probe_s": cliffordnet_probe_s,
+    # Production single-stage models (author-aligned: depth scaling, dim=128)
+    "12_2": cliffordnet_12_2,
+    "12_5": cliffordnet_12_5,
+    "18_5": cliffordnet_18_5,
+    "32_3": cliffordnet_32_3,
+    "32_5": cliffordnet_32_5,
+    "64_5": cliffordnet_64_5,
+    # ImageNet-oriented hierarchical variants suggested in CAN issue #5
+    "hier_p4": hier_cliffordnet_p4,
+    "hier_p2": hier_cliffordnet_p2,
+    "hier_can_tiny": hier_cliffordnet_can_tiny,
+}
+
+
+MODEL_SIZE_CHOICES = tuple(MODEL_BUILDERS)
+
+
 # ============================================================================
 # Lightning Module
 # ============================================================================
@@ -596,32 +891,21 @@ class CliffordNetLightning(L.LightningModule):
         cutmix_alpha=1.0,
         mixup_prob=1.0,
         mixup_switch_prob=0.5,
+        label_smoothing=0.1,
         ema_decay=0.9999,
         wedge_mode="fma",
         ortho_weight=0.01,
         enable_diagnostics=True,
         diag_log_interval=100,
+        warmup_epochs=1,
+        eta_min=1e-6,
     ):
         super().__init__()
         self.save_hyperparameters()
 
-        model_builders = {
-            # Probe models (hyperparam search)
-            "probe_xs": cliffordnet_probe_xs,
-            "probe_s": cliffordnet_probe_s,
-            # Production models (author-aligned: depth scaling, dim=128)
-            "12_2": cliffordnet_12_2,
-            "12_5": cliffordnet_12_5,
-            "18_5": cliffordnet_18_5,
-            "32_3": cliffordnet_32_3,
-            "32_5": cliffordnet_32_5,
-            "64_5": cliffordnet_64_5,
-        }
-
-        # Build the raw (un-compiled) model — keep a reference for:
-        #   - EMA state_dict / load_state_dict (W1: avoids torch.compile wrapper)
-        #   - Diagnostic forward (C3: no graph breaks)
-        self._raw_model = model_builders[model_size](
+        # Build an uncompiled training model for checkpointing/diagnostics, then
+        # compile only the training path. EMA validation uses a separate module.
+        self._raw_model = MODEL_BUILDERS[model_size](
             num_classes=num_classes,
             wedge_mode=wedge_mode,
         )
@@ -640,13 +924,17 @@ class CliffordNetLightning(L.LightningModule):
             num_classes=num_classes,
         )
         # With mixup, targets become soft labels → use soft cross-entropy
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         # Validation uses un-smoothed loss for accurate confidence measurement
         self.val_criterion = nn.CrossEntropyLoss()
 
-        # EMA model (updated manually in on_train_batch_end)
+        # EMA validation model is intentionally separate and uncompiled. Do not
+        # swap EMA weights into the training model; state_dict tensors may share
+        # storage with compiled model params and cause validation-aligned spikes.
         self.ema_decay = ema_decay
-        self._ema_model = None  # lazily initialized on first step
+        self._ema_model = copy.deepcopy(self._raw_model)
+        self._ema_model.requires_grad_(False)
+        self._ema_model.eval()
 
         self.register_buffer(
             "inv_mean", torch.tensor(IMAGENET_DEFAULT_MEAN).view(1, 3, 1, 1)
@@ -734,22 +1022,7 @@ class CliffordNetLightning(L.LightningModule):
         diag_bs = min(4, images.shape[0])
         images = images[:diag_bs]
 
-        # Run diagnostic forward on each interaction layer using the raw model
-        # which shares weights with the compiled model.
-        all_diags = {}
-        with torch.no_grad():
-            x = self._raw_model.stem(images)
-            for i, block in enumerate(self._raw_model.blocks):
-                x_ln = block.norm(x)
-                layer_diags = block.interaction.forward_diagnostics(x_ln)
-                for k, v in layer_diags.items():
-                    all_diags[f"block_{i}/{k}"] = v
-                # Continue the forward pass for subsequent blocks
-                g_feat = block.interaction(x_ln)
-                m = torch.cat([x_ln, g_feat], dim=1)
-                alpha = torch.sigmoid(block.gate_linear(m))
-                h_mix = F.silu(x_ln) + alpha * g_feat
-                x = x + block.drop_path(block.gamma * h_mix)
+        all_diags = self._raw_model.forward_diagnostics(images)
 
         # Log summary across all blocks (mean of per-block values)
         summary_keys = [
@@ -774,18 +1047,19 @@ class CliffordNetLightning(L.LightningModule):
                 )
 
         # Log per-block detail for first, middle, last block
-        n_blocks = len(self._raw_model.blocks)
-        sample_blocks = sorted(set([0, n_blocks // 2, n_blocks - 1]))
-        for bi in sample_blocks:
+        block_labels = self._raw_model.diagnostic_block_labels()
+        sample_indices = sorted(set([0, len(block_labels) // 2, len(block_labels) - 1]))
+        for sample_idx in sample_indices:
+            label = block_labels[sample_idx]
             for sk in [
                 "cancel/rel_diff_mean",
                 "magnitude/wedge_abs_mean",
                 "ortho/cos_sim_mean",
             ]:
-                key = f"block_{bi}/{sk}"
+                key = f"{label}/{sk}"
                 if key in all_diags:
                     self.log(
-                        f"diag/block_{bi}/{sk}",
+                        f"diag/{label}/{sk}",
                         all_diags[key],
                         prog_bar=False,
                         sync_dist=False,
@@ -804,25 +1078,27 @@ class CliffordNetLightning(L.LightningModule):
             self._log_grad_norms()
 
     def _init_ema(self):
-        """Lazily create EMA state dicts (avoids doubling memory at init)."""
-        if self._ema_model is not None:
-            return
-        # W1 fix: use _raw_model for state_dict to bypass torch.compile wrapper
-        self._ema_model = {
-            k: v.clone().detach() for k, v in self._raw_model.state_dict().items()
-        }
+        """Ensure the separate uncompiled EMA model is on the active device."""
+        self._ema_model.eval()
+        self._ema_model.to(device=self.device, memory_format=torch.channels_last)
 
     def _update_ema(self):
         self._init_ema()
         d = self.ema_decay
-        # W1 fix: use _raw_model for state_dict (no recompilation overhead)
-        model_sd = self._raw_model.state_dict()
-        for k in self._ema_model:
-            v = model_sd[k].detach()
-            if v.is_floating_point():
-                self._ema_model[k].lerp_(v, 1 - d)
-            else:
-                self._ema_model[k].copy_(v)
+        with torch.no_grad():
+            for ema_param, model_param in zip(
+                self._ema_model.parameters(), self._raw_model.parameters()
+            ):
+                ema_param.mul_(d).add_(model_param.detach(), alpha=1 - d)
+            for ema_buffer, model_buffer in zip(
+                self._ema_model.buffers(), self._raw_model.buffers()
+            ):
+                ema_buffer.copy_(model_buffer.detach())
+
+    def _validation_model(self):
+        self._init_ema()
+        self._ema_model.eval()
+        return self._ema_model
 
     def _build_grad_param_groups(self):
         """W2 fix: cache parameter groups once to avoid re-iterating named_parameters."""
@@ -879,28 +1155,10 @@ class CliffordNetLightning(L.LightningModule):
                 sync_dist=False,
             )
 
-    def _swap_ema(self):
-        """Swap model weights with EMA weights (call before/after val).
-        W1 fix: operates on _raw_model to avoid torch.compile recompilation."""
-        if self._ema_model is None:
-            return
-        model_sd = self._raw_model.state_dict()
-        for k in self._ema_model:
-            model_sd[k], self._ema_model[k] = (
-                self._ema_model[k],
-                model_sd[k],
-            )
-        self._raw_model.load_state_dict(model_sd)
-
-    def on_validation_start(self):
-        self._swap_ema()  # use EMA weights for validation
-
-    def on_validation_end(self):
-        self._swap_ema()  # swap back to training weights
-
     def validation_step(self, batch, batch_idx):
         images, labels = batch
-        outputs = self(images)
+        x_cl = images.contiguous(memory_format=torch.channels_last)
+        outputs = self._validation_model()(x_cl)
         loss = self.val_criterion(outputs, labels)
 
         acc1, acc5 = self._accuracy(outputs, labels, topk=(1, 5))
@@ -1059,7 +1317,7 @@ class CliffordNetLightning(L.LightningModule):
         # Separate params: no weight decay for norm layers, biases, and layer scale
         decay_params = []
         no_decay_params = []
-        for name, param in self.named_parameters():
+        for name, param in self._raw_model.named_parameters():
             if not param.requires_grad:
                 continue
             if param.ndim <= 1 or "bias" in name or "norm" in name or "gamma" in name:
@@ -1075,15 +1333,17 @@ class CliffordNetLightning(L.LightningModule):
             lr=self.hparams.learning_rate,
         )
 
-        # Linear warmup for 1 epoch, then cosine decay to eta_min over
+        # Linear warmup, then cosine decay to eta_min over
         # the remaining epochs.  Both schedulers step per-step (not per-epoch)
         # so the curve is smooth.
         # We estimate steps_per_epoch from the trainer if available.
-        steps_per_epoch = (
-            self.trainer.estimated_stepping_batches // self.hparams.max_epochs
+        total_steps = max(1, self.trainer.estimated_stepping_batches)
+        steps_per_epoch = max(
+            1, total_steps // max(1, self.hparams.max_epochs)
         )
-        warmup_steps = 1 * steps_per_epoch
-        total_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = max(1, self.hparams.warmup_epochs * steps_per_epoch)
+        if total_steps > 1:
+            warmup_steps = min(warmup_steps, total_steps - 1)
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
@@ -1093,8 +1353,8 @@ class CliffordNetLightning(L.LightningModule):
         )
         cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=total_steps - warmup_steps,
-            eta_min=1e-6,
+            T_max=max(1, total_steps - warmup_steps),
+            eta_min=self.hparams.eta_min,
         )
         scheduler = torch.optim.lr_scheduler.SequentialLR(
             optimizer,
@@ -1135,37 +1395,19 @@ class ImageNet1kDataModule(L.LightningDataModule):
         nfs_data_dir,
         batch_size,
         num_workers,
-        prefetch_local=False,
-        local_cache_dir=None,
     ):
         super().__init__()
         self.nfs_data_dir = nfs_data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.prefetch_local = prefetch_local
-        self.local_cache_dir = local_cache_dir or os.path.join(
-            "/tmp", str(os.getuid()), "imagenet1k_cache"
-        )
-        # 讓 prepare_data 在每個節點的 local rank 0 各跑一次
         self.prepare_data_per_node = True
 
     def prepare_data(self):
-        """
-        在每個節點的 local rank 0 上執行。
-        1) 確認 NFS 上已有 HF dataset cache（首次會下載）
-        2) 若 --prefetch-local，將 NFS cache 複製到 /tmp/$UID
-        """
+        """Ensure the Hugging Face dataset cache exists on shared storage."""
         load_dataset("ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir)
-        if self.prefetch_local:
-            prefetch_nfs_to_local(self.nfs_data_dir, self.local_cache_dir)
 
     def setup(self, stage=None):
-        """
-        在所有 rank 上執行（Lightning 會在 prepare_data 完成後加 barrier）。
-        """
-        effective_dir = (
-            self.local_cache_dir if self.prefetch_local else self.nfs_data_dir
-        )
+        """Load datasets on every rank after Lightning's prepare_data barrier."""
 
         train_tf = transforms.Compose(
             [
@@ -1187,7 +1429,7 @@ class ImageNet1kDataModule(L.LightningDataModule):
             ]
         )
 
-        ds = load_dataset("ILSVRC/imagenet-1k", cache_dir=effective_dir)
+        ds = load_dataset("ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir)
         self.train_ds = HFImageNetDataset(ds["train"], transform=train_tf)
         self.val_ds = HFImageNetDataset(ds["validation"], transform=val_tf)
 
@@ -1225,6 +1467,7 @@ def auto_find_batch_size(
     model_kwargs,
     max_batch_size=1024,
     min_batch_size=8,
+    safety_factor=0.92,
     input_shape=(3, 224, 224),
     dtype=torch.bfloat16,
     device=None,
@@ -1281,10 +1524,18 @@ def auto_find_batch_size(
     best = min_batch_size
     lo, hi = min_batch_size, max_batch_size
 
+    def _is_oom(exc):
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            return True
+        text = str(exc).lower()
+        return "out of memory" in text or "cuda oom" in text or "cublas_status_alloc_failed" in text
+
     while lo <= hi:
         mid = (lo + hi) // 2
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        x = y = out = loss = None
         try:
             x = torch.randn(mid, *input_shape, device=device, dtype=dtype).contiguous(
                 memory_format=torch.channels_last
@@ -1301,21 +1552,35 @@ def auto_find_batch_size(
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
+            peak_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
             del x, y, out, loss
             torch.cuda.empty_cache()
             best = mid
             lo = mid + 1
-        except (torch.cuda.OutOfMemoryError, RuntimeError):
+            print(f"[AutoBS] batch={mid} ok, peak_alloc={peak_mb:.0f} MiB")
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+            del x, y, out, loss
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
-            hi = mid - 1
+            if _is_oom(exc):
+                hi = mid - 1
+            else:
+                print(f"[AutoBS] batch={mid} FAILED with non-OOM error: {exc}")
+                hi = mid - 1
 
     del model, criterion, optimizer
     torch.cuda.empty_cache()
 
+    allocated_mb = torch.cuda.memory_allocated(device) / (1024**2)
+    reserved_mb = torch.cuda.memory_reserved(device) / (1024**2)
+    total_mb = torch.cuda.get_device_properties(device).total_memory / (1024**2)
+    print(
+        f"[AutoBS] Max fit: {best}, peak_alloc={torch.cuda.max_memory_allocated(device)/(1024**2):.0f} MiB"
+    )
+
     # Round down to nearest multiple of 8 for tensor-core efficiency
-    safe_bs = max(min_batch_size, ((int(best * 0.85)) // 8) * 8)
-    print(f"[AutoBS] Max fit: {best}, using batch size: {safe_bs}")
+    safe_bs = max(min_batch_size, ((int(best * safety_factor)) // 8) * 8)
+    print(f"[AutoBS] safety_factor={safety_factor}, using batch size: {safe_bs}")
     return safe_bs
 
 
@@ -1327,16 +1592,17 @@ def main():
         "--data-dir",
         type=str,
         default="./imagenet1k",
-        help="NFS path where HuggingFace caches ImageNet-1k",
+        help="Shared storage path where HuggingFace caches ImageNet-1k",
     )
     parser.add_argument(
         "--model-size",
         type=str,
-        default="12_2",
-        choices=["probe_xs", "probe_s", "12_2", "12_5", "18_5", "32_3", "32_5", "64_5"],
+        default="hier_can_tiny",
+        choices=MODEL_SIZE_CHOICES,
         help="Model size variant. "
         "'probe_*' = tiny models for fast hyperparam sweeps. "
-        "'{depth}_{shifts}' = author-aligned configs (dim=128, scale by depth).",
+        "'{depth}_{shifts}' = single-stage configs. "
+        "'hier_*' = CAN-style hierarchical ImageNet configs.",
     )
     parser.add_argument(
         "--batch-size",
@@ -1387,18 +1653,6 @@ def main():
     parser.add_argument(
         "--resume", type=str, default=None, help="Checkpoint path to resume from"
     )
-    # ---- Prefetch ----
-    parser.add_argument(
-        "--prefetch-local",
-        action="store_true",
-        help="Copy HF cache from NFS to /tmp/$UID before training",
-    )
-    parser.add_argument(
-        "--local-cache-dir",
-        type=str,
-        default=None,
-        help="Local SSD path for prefetch (default: /tmp/$UID/imagenet_cache)",
-    )
     # ---- Wandb ----
     parser.add_argument(
         "--wandb-project",
@@ -1409,7 +1663,7 @@ def main():
     parser.add_argument(
         "--wandb-entity",
         type=str,
-        default="nooobkevin",
+        default=None,
         help="Wandb entity (team/user name)",
     )
     parser.add_argument(
@@ -1480,7 +1734,7 @@ def main():
             probe_device = torch.device(f"cuda:{local_rank}")
             print(f"[AutoBS] Probing on {probe_device} ...")
             detected_bs = auto_find_batch_size(
-                model_cls=CliffordNet,
+                model_cls=model_cls_for_size(args.model_size),
                 model_kwargs=_model_kwargs_for_size(args.model_size),
                 device=probe_device,
             )
@@ -1508,8 +1762,6 @@ def main():
         nfs_data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        prefetch_local=args.prefetch_local,
-        local_cache_dir=args.local_cache_dir,
     )
 
     model = CliffordNetLightning(
@@ -1590,12 +1842,44 @@ def _model_kwargs_for_size(size):
         "32_3": dict(embed_dim=128, depth=32, shifts=shifts(3), drop_path_rate=0.3),
         "32_5": dict(embed_dim=128, depth=32, shifts=shifts(5), drop_path_rate=0.3),
         "64_5": dict(embed_dim=128, depth=64, shifts=shifts(5), drop_path_rate=0.4),
+        # Hierarchical ImageNet variants
+        "hier_p4": dict(
+            patch_size=4,
+            embed_dim=48,
+            stage_dims=(48, 96, 160, 256),
+            stage_depths=(2, 2, 4, 2),
+            shifts=(1, 2),
+            downsample_mode="conv",
+            drop_path_rate=0.20,
+        ),
+        "hier_p2": dict(
+            patch_size=2,
+            embed_dim=32,
+            stage_dims=(32, 64, 96, 160, 256),
+            stage_depths=(1, 2, 2, 4, 2),
+            shifts=(1, 2),
+            downsample_mode="conv",
+            drop_path_rate=0.15,
+        ),
+        "hier_can_tiny": dict(
+            patch_size=4,
+            embed_dim=32,
+            stage_depths=(3, 4, 5),
+            stage_dims=None,
+            dim_policy="double",
+            shifts=(1, 2),
+            downsample_mode="conv",
+            drop_path_rate=0.10,
+        ),
     }
     kwargs = configs[size]
     kwargs["num_classes"] = 1000
-    kwargs["img_size"] = 224
     kwargs["in_chans"] = 3
     return kwargs
+
+
+def model_cls_for_size(size):
+    return HierarchicalCliffordNet if size.startswith("hier_") else CliffordNet
 
 
 if __name__ == "__main__":

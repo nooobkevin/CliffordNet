@@ -2,7 +2,7 @@
 #
 # Searches the core training hyperparameters on small probe models.
 # Run with:
-#   wandb sweep sweep_hparam.yaml          # prints a sweep ID
+#   wandb sweep configs/sweeps/hparam.yaml # prints a sweep ID
 #   wandb agent <entity>/<project>/<id>    # start one agent per GPU
 #
 # Each run trains for --epochs 30 on probe_xs (206K params) which takes
@@ -10,7 +10,7 @@
 # Transfer: take the best lr / weight_decay and use them directly on
 # production models (probe_s → 12_2 → 32_5).
 
-program: train_sweep.py
+program: src/cliffordnet/sweeps/train_sweep.py
 method: bayes
 
 metric:
@@ -50,13 +50,16 @@ parameters:
     value: 1.0
 
   model_size:
-    value: probe_xs          # 206K params — fast iteration
+    value: hier_can_tiny     # Closest ImageNet-oriented CAN hierarchical preset
 
   epochs:
     value: 10                # short runs — 10 epochs is enough for LR / ortho signal
 
   batch_size:
-    value: 2560              # ~80GB VRAM, push utilization close to limit
+    value: 0                 # auto-detect per GPU to avoid OOM during acceptance runs
+
+  auto_batch_max:
+    value: 2048
 
   num_workers:
     value: 8
