@@ -1,0 +1,216 @@
+[
+  {
+    "run": "in1k_subspace_femto_10ep",
+    "label": "Subspace-CAN Full (Inner+Wedge, lr=1e-3)",
+    "model_size": "in1k_subspace_femto",
+    "params": 3930440,
+    "params_m": 3.93,
+    "val_acc1": 52.82,
+    "val_acc5": 77.07,
+    "corruptions_10k": {
+      "contrast_0.12": 24.09,
+      "fog_veil": 49.58,
+      "highpass_edges": 3.84,
+      "fft_phase_only": 19.48
+    },
+    "diag_bf16": {
+      "cancel/rel_diff_lt1e-2": 0.018781,
+      "cancel/rel_diff_lt1e-4": 0.002693,
+      "cancel/rel_diff_mean": 0.483439,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 3.455151,
+      "magnitude/dot_abs_mean": 0.148411,
+      "magnitude/wedge_abs_max": 91.143229,
+      "magnitude/wedge_abs_mean": 1.51119,
+      "magnitude/wedge_to_dot_ratio": 10.973223,
+      "ortho/cos_sim_mean": 0.089903,
+      "ortho/subspace_cos_sim_mean": 0.886548,
+      "spectrum/effective_rank": 0.615743
+    },
+    "diag_fp32": {
+      "cancel/rel_diff_lt1e-2": 0.018981,
+      "cancel/rel_diff_lt1e-4": 0.000191,
+      "cancel/rel_diff_mean": 0.483444,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 1e-06,
+      "magnitude/dot_abs_mean": 0.148333,
+      "magnitude/wedge_abs_max": 90.937293,
+      "magnitude/wedge_abs_mean": 1.511456,
+      "magnitude/wedge_to_dot_ratio": 10.978508,
+      "ortho/cos_sim_mean": 0.089901,
+      "ortho/subspace_cos_sim_mean": 0.886546,
+      "spectrum/effective_rank": 0.615771
+    }
+  },
+  {
+    "run": "in1k_subspace_femto_sym_10ep",
+    "label": "Subspace-CAN Symmetric Control (u_i v_j + u_j v_i, lr=1e-3)",
+    "model_size": "in1k_subspace_femto_sym",
+    "params": 3930440,
+    "params_m": 3.93,
+    "val_acc1": 47.86,
+    "val_acc5": 72.49,
+    "corruptions_10k": {
+      "contrast_0.12": 18.76,
+      "fog_veil": 44.08,
+      "highpass_edges": 3.65,
+      "fft_phase_only": 13.83
+    },
+    "diag_bf16": {
+      "cancel/rel_diff_lt1e-2": 0.002959,
+      "cancel/rel_diff_lt1e-4": 0.000422,
+      "cancel/rel_diff_mean": 0.839006,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 2.767007,
+      "magnitude/dot_abs_mean": 0.242675,
+      "magnitude/wedge_abs_max": 238.786458,
+      "magnitude/wedge_abs_mean": 3.436361,
+      "magnitude/wedge_to_dot_ratio": 14.028619,
+      "ortho/cos_sim_mean": 0.097009,
+      "ortho/subspace_cos_sim_mean": 0.699591,
+      "spectrum/effective_rank": 0.602414
+    },
+    "diag_fp32": {
+      "cancel/rel_diff_lt1e-2": 0.002971,
+      "cancel/rel_diff_lt1e-4": 2.9e-05,
+      "cancel/rel_diff_mean": 0.839019,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 0.0,
+      "magnitude/dot_abs_mean": 0.242701,
+      "magnitude/wedge_abs_max": 238.678572,
+      "magnitude/wedge_abs_mean": 3.437002,
+      "magnitude/wedge_to_dot_ratio": 14.029227,
+      "ortho/cos_sim_mean": 0.09706,
+      "ortho/subspace_cos_sim_mean": 0.699577,
+      "spectrum/effective_rank": 0.602404
+    }
+  },
+  {
+    "run": "in1k_subspace_femto_inner_wide_10ep",
+    "label": "Subspace-CAN Iso-Param Inner/SwiGLU Control (lr=1e-3)",
+    "model_size": "in1k_subspace_femto_inner_wide",
+    "params": 3941884,
+    "params_m": 3.942,
+    "val_acc1": 50.19,
+    "val_acc5": 74.98,
+    "corruptions_10k": {
+      "contrast_0.12": 19.79,
+      "fog_veil": 46.85,
+      "highpass_edges": 4.32,
+      "fft_phase_only": 17.27
+    },
+    "diag_bf16": {
+      "cancel/rel_diff_lt1e-2": 0.0,
+      "cancel/rel_diff_lt1e-4": 0.0,
+      "cancel/rel_diff_mean": 0.0,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 2.350261,
+      "magnitude/dot_abs_mean": 0.32792,
+      "magnitude/wedge_abs_max": 0.0,
+      "magnitude/wedge_abs_mean": 0.0,
+      "magnitude/wedge_to_dot_ratio": 0.0,
+      "ortho/cos_sim_mean": 0.177453,
+      "ortho/subspace_cos_sim_mean": 0.59944,
+      "spectrum/effective_rank": 0.60463
+    },
+    "diag_fp32": {
+      "cancel/rel_diff_lt1e-2": 0.0,
+      "cancel/rel_diff_lt1e-4": 0.0,
+      "cancel/rel_diff_mean": 0.0,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 0.0,
+      "magnitude/dot_abs_mean": 0.328238,
+      "magnitude/wedge_abs_max": 0.0,
+      "magnitude/wedge_abs_mean": 0.0,
+      "magnitude/wedge_to_dot_ratio": 0.0,
+      "ortho/cos_sim_mean": 0.177436,
+      "ortho/subspace_cos_sim_mean": 0.599469,
+      "spectrum/effective_rank": 0.604607
+    }
+  },
+  {
+    "run": "in1k_rolling_femto_10ep_eager",
+    "label": "Shift-Rolling Hier-CliffordNet (S={1,2,4}, GGR, lr=1e-3)",
+    "model_size": "in1k_rolling_femto",
+    "params": 3945536,
+    "params_m": 3.946,
+    "val_acc1": 47.69,
+    "val_acc5": 72.8,
+    "corruptions_10k": {
+      "contrast_0.12": 22.25,
+      "fog_veil": 44.41,
+      "highpass_edges": 4.17,
+      "fft_phase_only": 14.17
+    },
+    "diag_bf16": {
+      "cancel/rel_diff_lt1e-2": 0.019921,
+      "cancel/rel_diff_lt1e-4": 0.00285,
+      "cancel/rel_diff_mean": 0.468722,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 1.424777,
+      "magnitude/dot_abs_mean": 0.49384,
+      "magnitude/wedge_abs_max": 37.359375,
+      "magnitude/wedge_abs_mean": 0.688824,
+      "magnitude/wedge_to_dot_ratio": 1.512667,
+      "ortho/cos_sim_mean": 0.073387,
+      "ortho/subspace_cos_sim_mean": 0.892512,
+      "spectrum/effective_rank": 0.755011
+    },
+    "diag_fp32": {
+      "cancel/rel_diff_lt1e-2": 0.020128,
+      "cancel/rel_diff_lt1e-4": 0.000203,
+      "cancel/rel_diff_mean": 0.468716,
+      "health/inf_count": 0.0,
+      "health/nan_count": 0.0,
+      "invariance/lambda_wedge_rel_err": 1e-06,
+      "magnitude/dot_abs_mean": 0.49394,
+      "magnitude/wedge_abs_max": 37.320374,
+      "magnitude/wedge_abs_mean": 0.688988,
+      "magnitude/wedge_to_dot_ratio": 1.512699,
+      "ortho/cos_sim_mean": 0.073428,
+      "ortho/subspace_cos_sim_mean": 0.8925,
+      "spectrum/effective_rank": 0.755011
+    }
+  },
+  {
+    "run": "baseline_convnext_atto_10ep",
+    "label": "ConvNeXt-Atto (4x MLP FFN, lr=1e-3)",
+    "model_size": "baseline_convnext_atto",
+    "params": 3695520,
+    "params_m": 3.696,
+    "val_acc1": 37.92,
+    "val_acc5": 63.2,
+    "corruptions_10k": {
+      "contrast_0.12": 10.0,
+      "fog_veil": 34.18,
+      "highpass_edges": 2.34,
+      "fft_phase_only": 12.29
+    },
+    "diag_bf16": {},
+    "diag_fp32": {}
+  },
+  {
+    "run": "baseline_convnext_atto_lr4e3_10ep",
+    "label": "ConvNeXt-Atto (4x MLP FFN, canonical lr=4e-3)",
+    "model_size": "baseline_convnext_atto",
+    "params": 3695520,
+    "params_m": 3.696,
+    "val_acc1": 49.71,
+    "val_acc5": 74.62,
+    "corruptions_10k": {
+      "contrast_0.12": 24.78,
+      "fog_veil": 47.5,
+      "highpass_edges": 4.94,
+      "fft_phase_only": 22.82
+    },
+    "diag_bf16": {},
+    "diag_fp32": {}
+  }
+]

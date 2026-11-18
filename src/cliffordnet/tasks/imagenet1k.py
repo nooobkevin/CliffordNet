@@ -853,6 +853,8 @@ def hier_cliffordnet_can_tiny(num_classes=1000, wedge_mode="fma"):
     )
 
 
+from cliffordnet.subspace import SUBSPACE_MODEL_BUILDERS, get_subspace_model_spec
+
 MODEL_BUILDERS = {
     # Probe models (hyperparam search)
     "probe_xs": cliffordnet_probe_xs,
@@ -868,6 +870,8 @@ MODEL_BUILDERS = {
     "hier_p4": hier_cliffordnet_p4,
     "hier_p2": hier_cliffordnet_p2,
     "hier_can_tiny": hier_cliffordnet_can_tiny,
+    # Subspace Clifford Networks (arXiv:2610.37226), deconfounding controls, and timm baselines
+    **SUBSPACE_MODEL_BUILDERS,
 }
 
 
@@ -884,6 +888,7 @@ class CliffordNetLightning(L.LightningModule):
         self,
         model_size="small",
         num_classes=1000,
+        img_size=224,
         learning_rate=3e-4,
         weight_decay=0.05,
         max_epochs=200,
@@ -894,53 +899,79 @@ class CliffordNetLightning(L.LightningModule):
         label_smoothing=0.1,
         ema_decay=0.9999,
         wedge_mode="fma",
+        backend="auto",
+        compile_model=True,
         ortho_weight=0.01,
         enable_diagnostics=True,
         diag_log_interval=100,
         warmup_epochs=1,
         eta_min=1e-6,
+        dataset_mean=IMAGENET_DEFAULT_MEAN,
+        dataset_std=IMAGENET_DEFAULT_STD,
     ):
         super().__init__()
         self.save_hyperparameters()
 
         # Build an uncompiled training model for checkpointing/diagnostics, then
-        # compile only the training path. EMA validation uses a separate module.
-        self._raw_model = MODEL_BUILDERS[model_size](
-            num_classes=num_classes,
-            wedge_mode=wedge_mode,
-        )
+        # optionally compile only the training path. EMA validation uses a separate module.
+        if model_size in SUBSPACE_MODEL_BUILDERS:
+            self._raw_model = SUBSPACE_MODEL_BUILDERS[model_size](
+                num_classes=num_classes,
+                img_size=img_size,
+                wedge_mode=wedge_mode,
+                backend=backend,
+            )
+        else:
+            self._raw_model = MODEL_BUILDERS[model_size](
+                num_classes=num_classes,
+                wedge_mode=wedge_mode,
+            )
         self._raw_model = self._raw_model.to(memory_format=torch.channels_last)
+        # Keep (1, C, 1, 1) LayerScale vectors in standard contiguous memory format;
+        # channels_last strides (C, 1, C, C) on 1x1x1 spatial parameters trigger a
+        # PyTorch 2.10 Inductor + DDP CompiledFunctionBackward gradient-shape bug.
+        for param in self._raw_model.parameters():
+            if param.ndim == 4 and param.shape[0] == 1 and param.shape[2:] == (1, 1):
+                param.data = param.data.contiguous()
 
         # Compiled model for training / inference.
         # torch.compile wraps _raw_model; they share the same parameters.
-        self.model = torch.compile(self._raw_model)
+        self.model = torch.compile(self._raw_model) if compile_model else self._raw_model
 
-        # Mixup / CutMix (applied in training_step, not in DataLoader)
-        self.mixup_fn = Mixup(
-            mixup_alpha=mixup_alpha,
-            cutmix_alpha=cutmix_alpha,
-            prob=mixup_prob,
-            switch_prob=mixup_switch_prob,
-            num_classes=num_classes,
-        )
-        # With mixup, targets become soft labels → use soft cross-entropy
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        # Mixup / CutMix (disabled cleanly when prob <= 0 or both alphas <= 0)
+        use_mixup = mixup_prob > 0.0 and (mixup_alpha > 0.0 or cutmix_alpha > 0.0)
+        if use_mixup:
+            self.mixup_fn = Mixup(
+                mixup_alpha=mixup_alpha,
+                cutmix_alpha=cutmix_alpha,
+                prob=mixup_prob,
+                switch_prob=mixup_switch_prob,
+                label_smoothing=label_smoothing,
+                num_classes=num_classes,
+            )
+            # Mixup already embeds label_smoothing into soft targets
+            self.criterion = nn.CrossEntropyLoss()
+        else:
+            self.mixup_fn = None
+            self.criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         # Validation uses un-smoothed loss for accurate confidence measurement
         self.val_criterion = nn.CrossEntropyLoss()
 
-        # EMA validation model is intentionally separate and uncompiled. Do not
-        # swap EMA weights into the training model; state_dict tensors may share
-        # storage with compiled model params and cause validation-aligned spikes.
+        # EMA validation model is intentionally separate and uncompiled.
+        # When ema_decay <= 0.0 (e.g. CIFAR-100 paper protocol), skip EMA copy.
         self.ema_decay = ema_decay
-        self._ema_model = copy.deepcopy(self._raw_model)
-        self._ema_model.requires_grad_(False)
-        self._ema_model.eval()
+        if ema_decay > 0.0:
+            self._ema_model = copy.deepcopy(self._raw_model)
+            self._ema_model.requires_grad_(False)
+            self._ema_model.eval()
+        else:
+            self._ema_model = None
 
         self.register_buffer(
-            "inv_mean", torch.tensor(IMAGENET_DEFAULT_MEAN).view(1, 3, 1, 1)
+            "inv_mean", torch.tensor(dataset_mean).view(1, 3, 1, 1)
         )
         self.register_buffer(
-            "inv_std", torch.tensor(IMAGENET_DEFAULT_STD).view(1, 3, 1, 1)
+            "inv_std", torch.tensor(dataset_std).view(1, 3, 1, 1)
         )
 
         self.val_preds = []
@@ -960,8 +991,11 @@ class CliffordNetLightning(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, labels = batch
-        # Apply Mixup / CutMix (produces soft labels)
-        images, labels = self.mixup_fn(images, labels)
+        if self.mixup_fn is not None:
+            images, labels = self.mixup_fn(images, labels)
+            hard_labels = labels.argmax(dim=1)
+        else:
+            hard_labels = labels
 
         # C1/C2 fix: when ortho_weight > 0, the compiled model computes
         # ortho loss INSIDE the graph (with gradients) — no side effects.
@@ -975,8 +1009,6 @@ class CliffordNetLightning(L.LightningModule):
             outputs = self.model(x_cl)
             loss = self.criterion(outputs, labels)
 
-        # For logging accuracy, use hard labels (argmax of soft targets)
-        hard_labels = labels.argmax(dim=1)
         acc1, acc5 = self._accuracy(outputs, hard_labels, topk=(1, 5))
 
         self.log("train/loss", loss, prog_bar=True, sync_dist=True)
@@ -1032,9 +1064,13 @@ class CliffordNetLightning(L.LightningModule):
             "magnitude/wedge_abs_mean",
             "magnitude/wedge_abs_max",
             "magnitude/dot_abs_mean",
+            "magnitude/wedge_to_dot_ratio",
             "health/nan_count",
             "health/inf_count",
             "ortho/cos_sim_mean",
+            "ortho/subspace_cos_sim_mean",
+            "invariance/lambda_wedge_rel_err",
+            "spectrum/effective_rank",
         ]
         for sk in summary_keys:
             vals = [v for k, v in all_diags.items() if k.endswith(sk)]
@@ -1048,6 +1084,8 @@ class CliffordNetLightning(L.LightningModule):
 
         # Log per-block detail for first, middle, last block
         block_labels = self._raw_model.diagnostic_block_labels()
+        if not block_labels:
+            return
         sample_indices = sorted(set([0, len(block_labels) // 2, len(block_labels) - 1]))
         for sample_idx in sample_indices:
             label = block_labels[sample_idx]
@@ -1079,10 +1117,14 @@ class CliffordNetLightning(L.LightningModule):
 
     def _init_ema(self):
         """Ensure the separate uncompiled EMA model is on the active device."""
+        if self._ema_model is None:
+            return
         self._ema_model.eval()
         self._ema_model.to(device=self.device, memory_format=torch.channels_last)
 
     def _update_ema(self):
+        if self._ema_model is None:
+            return
         self._init_ema()
         d = self.ema_decay
         with torch.no_grad():
@@ -1096,6 +1138,8 @@ class CliffordNetLightning(L.LightningModule):
                 ema_buffer.copy_(model_buffer.detach())
 
     def _validation_model(self):
+        if self._ema_model is None:
+            return self._raw_model
         self._init_ema()
         self._ema_model.eval()
         return self._ema_model
@@ -1104,9 +1148,9 @@ class CliffordNetLightning(L.LightningModule):
         """W2 fix: cache parameter groups once to avoid re-iterating named_parameters."""
         state_params, ctx_params, proj_params = [], [], []
         for name, param in self._raw_model.named_parameters():
-            if ".get_state." in name:
+            if ".get_state." in name or ".get_state_ctx." in name:
                 state_params.append(param)
-            elif ".get_context_local." in name:
+            elif ".get_context_local." in name or ".ctx_dw." in name or ".spatial_diffusion." in name:
                 ctx_params.append(param)
             elif ".final_proj." in name:
                 proj_params.append(param)
@@ -1171,22 +1215,37 @@ class CliffordNetLightning(L.LightningModule):
         self.val_preds.append(preds.cpu())
         self.val_labels.append(labels.cpu())
 
-        if batch_idx == 0 and self.trainer.is_global_zero:
+        should_plot = (
+            self.hparams.max_epochs < 50
+            or (self.current_epoch + 1) % 50 == 0
+            or (self.current_epoch + 1) == self.hparams.max_epochs
+        )
+        if batch_idx == 0 and self.trainer.is_global_zero and should_plot and self._has_wandb_exp():
             self._log_images(images, labels, outputs)
 
         return loss
 
+    def _has_wandb_exp(self) -> bool:
+        return (
+            self.logger is not None
+            and hasattr(self.logger, "experiment")
+            and hasattr(self.logger.experiment, "log")
+        )
+
     def on_validation_epoch_end(self):
         # ------------------------------------------------------------------
         # Confusion matrix is expensive for 1000 classes (8MB all_reduce).
-        # Only compute at actual epoch boundaries, not every val_check_interval.
-        # We check a flag set in on_train_epoch_end to stay safe with DDP
-        # (all ranks must agree on whether to all_reduce or not).
+        # Only compute at actual epoch boundaries (and sparsely on 200-epoch runs).
         # ------------------------------------------------------------------
-        is_epoch_end = self._at_epoch_boundary
+        should_plot = (
+            self.hparams.max_epochs < 50
+            or (self.current_epoch + 1) % 50 == 0
+            or (self.current_epoch + 1) == self.hparams.max_epochs
+        )
+        is_epoch_end = self._at_epoch_boundary and should_plot
         num_cls = self.hparams.num_classes
 
-        if is_epoch_end and len(self.val_preds) > 0:
+        if is_epoch_end and len(self.val_preds) > 0 and self._has_wandb_exp():
             all_preds = torch.cat(self.val_preds).numpy()
             all_labels = torch.cat(self.val_labels).numpy()
             cm_local = confusion_matrix(all_labels, all_preds, labels=range(num_cls))
@@ -1338,6 +1397,17 @@ class CliffordNetLightning(L.LightningModule):
         # so the curve is smooth.
         # We estimate steps_per_epoch from the trainer if available.
         total_steps = max(1, self.trainer.estimated_stepping_batches)
+        if self.hparams.warmup_epochs <= 0:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=total_steps,
+                eta_min=self.hparams.eta_min,
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+            }
+
         steps_per_epoch = max(
             1, total_steps // max(1, self.hparams.max_epochs)
         )
@@ -1828,8 +1898,23 @@ def main():
     trainer.fit(model, data, ckpt_path=args.resume)
 
 
-def _model_kwargs_for_size(size):
-    """Return CliffordNet constructor kwargs for a given model size string."""
+def _model_kwargs_for_size(
+    size,
+    num_classes=1000,
+    img_size=224,
+    wedge_mode="fma",
+    backend="auto",
+):
+    """Return constructor kwargs for a given model size string."""
+    if size in SUBSPACE_MODEL_BUILDERS:
+        return get_subspace_model_spec(
+            size,
+            num_classes=num_classes,
+            img_size=img_size,
+            wedge_mode=wedge_mode,
+            backend=backend,
+        ).model_kwargs
+
     shifts = _gen_shifts
     configs = {
         # Probe models (hyperparam search)
@@ -1872,13 +1957,16 @@ def _model_kwargs_for_size(size):
             drop_path_rate=0.10,
         ),
     }
-    kwargs = configs[size]
-    kwargs["num_classes"] = 1000
+    kwargs = dict(configs[size])
+    kwargs["num_classes"] = num_classes
     kwargs["in_chans"] = 3
+    kwargs["wedge_mode"] = wedge_mode
     return kwargs
 
 
 def model_cls_for_size(size):
+    if size in SUBSPACE_MODEL_BUILDERS:
+        return get_subspace_model_spec(size).model_cls
     return HierarchicalCliffordNet if size.startswith("hier_") else CliffordNet
 
 

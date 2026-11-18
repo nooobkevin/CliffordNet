@@ -1,0 +1,136 @@
+[
+  {
+    "name": "w2_ablate_k4_wedge_paper",
+    "description": "Paper 2 Table 4 Wedge-only k=4 (pure anti-symmetric bivector, zero diagonal energy)",
+    "track": "Track1&5-Wedge",
+    "gpu_id": 0,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1895.56,
+    "wall_time_min": 31.59,
+    "best_val_acc1_pct": 77.84,
+    "overrides": [
+      "model.size=subspace_hier_k4_wedge"
+    ],
+    "model_size": "subspace_hier_k4_wedge",
+    "log_path": "<runs_root>/cifar100/w2_ablate_k4_wedge_paper/stdout.log"
+  },
+  {
+    "name": "w2_ablate_k4_spfree",
+    "description": "Paper 2 Table 4 SpatialDiffusion-free k=4 (tests DWConv5x5 contribution)",
+    "track": "Track0-Ablate",
+    "gpu_id": 1,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1644.31,
+    "wall_time_min": 27.41,
+    "best_val_acc1_pct": 77.02,
+    "overrides": [
+      "model.size=subspace_hier_k4_spfree"
+    ],
+    "model_size": "subspace_hier_k4_spfree",
+    "log_path": "<runs_root>/cifar100/w2_ablate_k4_spfree/stdout.log"
+  },
+  {
+    "name": "w2_ctrl3a_subspace_k4_ggr",
+    "description": "Control 3a (2x2 Factorial): Subspace GP k=4 inside Paper 1 GGR+LayerNorm2d block",
+    "track": "Track1-2x2Block",
+    "gpu_id": 2,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1825.41,
+    "wall_time_min": 30.42,
+    "best_val_acc1_pct": 77.88,
+    "overrides": [
+      "model.size=subspace_hier_k4_ggr"
+    ],
+    "model_size": "subspace_hier_k4_ggr",
+    "log_path": "<runs_root>/cifar100/w2_ctrl3a_subspace_k4_ggr/stdout.log"
+  },
+  {
+    "name": "w2_ctrl3b_rolling_s3_lietrotter",
+    "description": "Control 3b (2x2 Factorial): Rolling S={1,2,4} inside Paper 2 Lie-Trotter+DW5x5+BN block",
+    "track": "Track1-2x2Block",
+    "gpu_id": 3,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2788.41,
+    "wall_time_min": 46.47,
+    "best_val_acc1_pct": 77.19,
+    "overrides": [
+      "model.size=rolling_hier_s3_lietrotter"
+    ],
+    "model_size": "rolling_hier_s3_lietrotter",
+    "log_path": "<runs_root>/cifar100/w2_ctrl3b_rolling_s3_lietrotter/stdout.log"
+  },
+  {
+    "name": "w2_repro_subspace_244_dpr025",
+    "description": "Hier-Subspace-CAN (2,4,4) with CAN-aligned higher DropPath=0.25 to test CIFAR overfitting gap",
+    "track": "Track0-Reg",
+    "gpu_id": 4,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1915.32,
+    "wall_time_min": 31.92,
+    "best_val_acc1_pct": 78.84,
+    "overrides": [
+      "model.size=subspace_hier_244_dpr025"
+    ],
+    "model_size": "subspace_hier_244_dpr025",
+    "log_path": "<runs_root>/cifar100/w2_repro_subspace_244_dpr025/stdout.log"
+  },
+  {
+    "name": "w2_scale_subspace_hier_244_24",
+    "description": "Paper 2 Table 3 24-layer Hier-Subspace-CAN-24 (4,10,10) k=(2,4,4)",
+    "track": "Track0-Scale",
+    "gpu_id": 5,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 3047.11,
+    "wall_time_min": 50.79,
+    "best_val_acc1_pct": 79.78,
+    "overrides": [
+      "model.size=subspace_hier_244_24"
+    ],
+    "model_size": "subspace_hier_244_24",
+    "log_path": "<runs_root>/cifar100/w2_scale_subspace_hier_244_24/stdout.log"
+  },
+  {
+    "name": "w2_num_k4_bf16_naive",
+    "description": "Track 3 Numerical: Hier-Subspace-CAN k=4 in bf16-mixed with naive subtraction",
+    "track": "Track3-Numerical",
+    "gpu_id": 6,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1781.13,
+    "wall_time_min": 29.69,
+    "best_val_acc1_pct": 77.74,
+    "overrides": [
+      "model.size=subspace_hier_k4",
+      "runtime.precision=bf16-mixed",
+      "model.wedge_mode=naive",
+      "model.backend=pytorch"
+    ],
+    "model_size": "subspace_hier_k4",
+    "log_path": "<runs_root>/cifar100/w2_num_k4_bf16_naive/stdout.log"
+  },
+  {
+    "name": "w2_num_k4_bf16_direct_z2",
+    "description": "Track 3 Lambda-Invariance: Hier-Subspace-CAN k=4 in bf16-mixed with direct u^z2 wedge",
+    "track": "Track3-Numerical",
+    "gpu_id": 7,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1740.82,
+    "wall_time_min": 29.01,
+    "best_val_acc1_pct": 77.92,
+    "overrides": [
+      "model.size=subspace_hier_k4",
+      "runtime.precision=bf16-mixed",
+      "model.wedge_mode=direct_z2",
+      "model.backend=pytorch"
+    ],
+    "model_size": "subspace_hier_k4",
+    "log_path": "<runs_root>/cifar100/w2_num_k4_bf16_direct_z2/stdout.log"
+  }
+]

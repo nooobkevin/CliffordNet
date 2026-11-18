@@ -1,0 +1,58 @@
+[
+  {
+    "name": "w2_ablate_k4_wedge_paper",
+    "track": "Track1&5-Wedge",
+    "description": "Paper 2 Table 4 Wedge-only k=4 (pure anti-symmetric bivector, zero diagonal energy)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_wedge"]
+  },
+  {
+    "name": "w2_ablate_k4_spfree",
+    "track": "Track0-Ablate",
+    "description": "Paper 2 Table 4 SpatialDiffusion-free k=4 (tests DWConv5x5 contribution)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_spfree"]
+  },
+  {
+    "name": "w2_ctrl3a_subspace_k4_ggr",
+    "track": "Track1-2x2Block",
+    "description": "Control 3a (2x2 Factorial): Subspace GP k=4 inside Paper 1 GGR+LayerNorm2d block",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ggr"]
+  },
+  {
+    "name": "w2_ctrl3b_rolling_s3_lietrotter",
+    "track": "Track1-2x2Block",
+    "description": "Control 3b (2x2 Factorial): Rolling S={1,2,4} inside Paper 2 Lie-Trotter+DW5x5+BN block",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=rolling_hier_s3_lietrotter"]
+  },
+  {
+    "name": "w2_repro_subspace_244_dpr025",
+    "track": "Track0-Reg",
+    "description": "Hier-Subspace-CAN (2,4,4) with CAN-aligned higher DropPath=0.25 to test CIFAR overfitting gap",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_244_dpr025"]
+  },
+  {
+    "name": "w2_scale_subspace_hier_244_24",
+    "track": "Track0-Scale",
+    "description": "Paper 2 Table 3 24-layer Hier-Subspace-CAN-24 (4,10,10) k=(2,4,4)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_244_24"]
+  },
+  {
+    "name": "w2_num_k4_bf16_naive",
+    "track": "Track3-Numerical",
+    "description": "Track 3 Numerical: Hier-Subspace-CAN k=4 in bf16-mixed with naive subtraction",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4", "runtime.precision=bf16-mixed", "model.wedge_mode=naive", "model.backend=pytorch"]
+  },
+  {
+    "name": "w2_num_k4_bf16_direct_z2",
+    "track": "Track3-Numerical",
+    "description": "Track 3 Lambda-Invariance: Hier-Subspace-CAN k=4 in bf16-mixed with direct u^z2 wedge",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4", "runtime.precision=bf16-mixed", "model.wedge_mode=direct_z2", "model.backend=pytorch"]
+  }
+]

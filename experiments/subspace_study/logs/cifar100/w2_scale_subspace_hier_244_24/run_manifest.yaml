@@ -1,0 +1,143 @@
+config:
+  run:
+    profile: cifar100
+    name: w2_scale_subspace_hier_244_24
+    output_dir: <runs_root>/cifar100
+    seed: 42
+    tags:
+    - cifar100
+    - subspace_repro
+    notes: null
+  data:
+    dataset: cifar100
+    dataset_id: cifar100
+    data_dir: <cifar100_dir>
+    num_workers: 4
+    image_size: 32
+    num_classes: 100
+  model:
+    size: subspace_hier_244_24
+    wedge_mode: fma
+    backend: auto
+    compile: true
+    ortho_weight: 0.0
+    enable_diagnostics: true
+    diag_log_interval: 100
+  recipe:
+    mixup_alpha: 0.0
+    cutmix_alpha: 0.0
+    mixup_prob: 0.0
+    mixup_switch_prob: 0.0
+    label_smoothing: 0.0
+    ema_decay: 0.0
+    warmup_epochs: 0
+    eta_min: 0.0
+  optim:
+    lr: 0.001
+    base_lr: 0.001
+    base_global_batch_size: 128
+    scale_lr: false
+    weight_decay: 0.1
+  training:
+    batch_size: 128
+    target_global_batch_size: null
+    accumulate_grad_batches: 1
+    max_epochs: 200
+    val_check_interval: 1.0
+    gradient_clip_val: 0.0
+    limit_train_batches: null
+    limit_val_batches: null
+    log_every_n_steps: 50
+  runtime:
+    accelerator: gpu
+    devices: 1
+    num_nodes: 1
+    strategy: auto
+    precision: 32-true
+    deterministic: false
+    benchmark: true
+    matmul_precision: high
+    auto_batch:
+      enabled: false
+      min_batch_size: 32
+      max_batch_size: 512
+      safety_factor: 0.92
+    oom_retries: 0
+    preemption_checkpoint: true
+  checkpoint:
+    resume: auto
+    monitor: val/acc1
+    mode: max
+    save_top_k: 1
+    save_last: true
+    filename: '{epoch}-{val/acc1:.4f}'
+    every_n_train_steps: null
+  wandb:
+    enabled: true
+    project: CliffordNet-Subspace-CIFAR100
+    entity: null
+    mode: offline
+    group: cifar100_repro
+    log_model: false
+    save_manifest_artifact: false
+    tags:
+    - cifar100
+  slurm:
+    account: null
+    partition: null
+    qos: null
+    nodes: 1
+    gpus_per_node: 1
+    gpus_per_task: '1'
+    gpu_type: null
+    cpus_per_task: auto
+    mem_per_gpu: null
+    time: 04:00:00
+    job_name: null
+    nodelist: null
+    exclude: null
+    constraint: null
+    output: null
+    error: null
+    script_dir: ./outputs/slurm
+    command_prefix: uv run python
+    torchrun_prefix: uv run torchrun
+    use_torchrun: true
+    master_port: 29500
+    srun_args: []
+    extra_directives: []
+    env: {}
+resources:
+  hostname: <h800-node>
+  cpu_count: 224
+  cuda_available: true
+  visible_devices: 1
+  gpus:
+  - index: 0
+    name: NVIDIA H800
+    total_memory_gb: 79.18
+  slurm:
+    SLURM_CPUS_PER_TASK: '224'
+    SLURM_GPUS_ON_NODE: '8'
+    SLURM_JOB_ID: '<slurm-job-id>'
+    SLURM_JOB_NAME: <interactive-session>
+    SLURM_LOCALID: '0'
+    SLURM_NNODES: '1'
+    SLURM_NODELIST: <h800-node>
+    SLURM_NTASKS: '1'
+    SLURM_NTASKS_PER_NODE: '1'
+    SLURM_PROCID: '0'
+computed:
+  devices: 1
+  num_nodes: 1
+  world_size: 1
+  num_workers: 4
+  micro_global_batch_size: 128
+  accumulate_grad_batches: 1
+  effective_global_batch_size: 128
+  learning_rate: 0.001
+env:
+  git_commit: 24d58f93b0b60b772ee6f55714a75652d14a2d26
+  git_dirty: true
+  slurm_job_id: '<slurm-job-id>'
+  wandb_mode: offline

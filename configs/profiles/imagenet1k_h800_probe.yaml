@@ -1,0 +1,65 @@
+run:
+  profile: imagenet1k_h800_probe
+  output_dir: ./outputs/imagenet1k
+  tags: [imagenet1k, h800, probe, subspace]
+
+data:
+  dataset: imagenet1k
+  dataset_id: ILSVRC/imagenet-1k
+  data_dir: ./imagenet1k
+  num_workers: 8
+  image_size: 224
+  num_classes: 1000
+
+model:
+  size: in1k_subspace_p4
+  wedge_mode: fma
+  backend: auto
+  ortho_weight: 0.0
+  enable_diagnostics: true
+  diag_log_interval: 50
+
+recipe:
+  mixup_alpha: 0.8
+  cutmix_alpha: 1.0
+  mixup_prob: 1.0
+  mixup_switch_prob: 0.5
+  label_smoothing: 0.1
+  ema_decay: 0.999
+  warmup_epochs: 3
+  eta_min: 1.0e-5
+
+optim:
+  lr: null
+  base_lr: 1.0e-3
+  base_global_batch_size: 1024
+  scale_lr: true
+  weight_decay: 0.05
+
+training:
+  batch_size: 256
+  target_global_batch_size: 2048
+  accumulate_grad_batches: 1
+  max_epochs: 20
+  val_check_interval: 1.0
+  gradient_clip_val: 1.0
+  log_every_n_steps: 25
+
+runtime:
+  accelerator: gpu
+  devices: 8
+  num_nodes: 1
+  strategy: ddp
+  precision: bf16-mixed
+  auto_batch:
+    enabled: false
+
+checkpoint:
+  save_top_k: 2
+  save_last: true
+
+wandb:
+  enabled: true
+  project: CliffordNet-Subspace-IN1K
+  mode: offline
+  save_manifest_artifact: false

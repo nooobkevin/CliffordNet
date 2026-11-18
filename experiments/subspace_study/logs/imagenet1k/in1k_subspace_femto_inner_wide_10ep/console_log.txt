@@ -1,0 +1,101 @@
+[rank: 1] Seed set to 42
+[rank: 0] Seed set to 42
+Using bfloat16 Automatic Mixed Precision (AMP)
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+`Trainer(val_check_interval=1.0)` was configured so validation will run at the end of the training epoch..
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/fabric/plugins/environments/slurm.py:204: The `srun` command is available on your system but is not used. HINT: If your intention is to run Lightning on SLURM, prepend your python command with `srun` like so: srun python3 <repo_root>/ ...
+Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/2
+Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/2
+----------------------------------------------------------------------------------------------------
+distributed_backend=nccl
+All distributed processes registered. Starting with 2 processes
+----------------------------------------------------------------------------------------------------
+[Gloo] Rank 1 is connected to 1[Gloo] Rank  peer ranks. Expected number of connected peer ranks is : 10
+ is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id uamq5fr3.
+wandb: Tracking run with wandb version 0.25.1
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in <runs_root>/imagenet1k_scale/in1k_subspace_femto_inner_wide_10ep/wandb/offline-run-20261117_210305-uamq5fr3
+LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [4,5]
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [4,5]
+Loading `train_dataloader` to estimate number of stepping batches.
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/model_summary/model_summary.py:242: Precision bf16-mixed is not supported by the model summary.  Estimated model size in MB will not be accurate. Using 32 bits instead.
+┃   ┃ Name          ┃ Type                            ┃ Params ┃ Mode  ┃ FLOPs ┃
+│ 0 │ _raw_model    │ HierarchicalSubspaceCliffordNet │  3.9 M │ train │     0 │
+│ 1 │ model         │ OptimizedModule                 │  3.9 M │ train │     0 │
+│ 2 │ criterion     │ CrossEntropyLoss                │      0 │ train │     0 │
+│ 3 │ val_criterion │ CrossEntropyLoss                │      0 │ train │     0 │
+│ 4 │ _ema_model    │ HierarchicalSubspaceCliffordNet │  3.9 M │ eval  │     0 │
+└───┴───────────────┴─────────────────────────────────┴────────┴───────┴───────┘
+Trainable params: 3.9 M                                                         
+Non-trainable params: 3.9 M                                                     
+Total params: 7.9 M                                                             
+Total estimated model params size (MB): 31                                      
+Modules in train mode: 158                                                      
+Modules in eval mode: 155                                                       
+Total FLOPs: 0                                                                  
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 2 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py:534: Found 155 module(s) in eval mode at the start of training. This may lead to unexpected behavior during training. If this is intentional, you can ignore this warning.
+<repo_root>/.venv/lib/python3.11/site-packages/torch/autograd/graph.py:865: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
+grad.sizes() = [1, 384, 1, 1], strides() = [384, 1, 1, 1]
+bucket_view.sizes() = [1, 384, 1, 1], strides() = [384, 1, 384, 384] (Triggered internally at /pytorch/torch/csrc/distributed/c10d/reducer.cpp:330.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+<repo_root>/.venv/lib/python3.11/site-packages/torch/autograd/graph.py:865: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
+grad.sizes() = [1, 384, 1, 1], strides() = [384, 1, 1, 1]
+bucket_view.sizes() = [1, 384, 1, 1], strides() = [384, 1, 384, 384] (Triggered internally at /pytorch/torch/csrc/distributed/c10d/reducer.cpp:330.)
+  return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 2 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 2 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+... [intermediate step logs omitted; full curve in epoch_metrics.csv] ...
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Corrupt EXIF data.  Expecting to read 4 bytes but only got 0. 
+  warnings.warn(str(msg))
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:759: UserWarning: Metadata Warning, tag 274 had too many entries: 4, expected 1
+  warnings.warn(
+<repo_root>/.venv/lib/python3.11/site-packages/PIL/TiffImagePlugin.py:949: UserWarning: Truncated File Read
+  warnings.warn(str(msg))
+`Trainer.fit` stopped: `max_epochs=10` reached.
+Epoch 9/9  ━━━━━━━━━━━━━━━━ 1251/1251 0:06:26 •       3.78it/s v_num: 5fr3      
+[1;34mwandb[0m: 
+[1;34mwandb[0m: You can sync this run to the cloud by running:
+[1;34mwandb[0m: [1mwandb sync <runs_root>/imagenet1k_scale/in1k_subspace_femto_inner_wide_10ep/wandb/offline-run-20261117_210305-uamq5fr3[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../..<runs_root>/imagenet1k_scale/in1k_subspace_femto_inner_wide_10ep/wandb/offline-run-20261117_210305-uamq5fr3/logs[0m

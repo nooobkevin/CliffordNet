@@ -1,0 +1,130 @@
+[
+  {
+    "name": "w1_repro_rolling_hier_s4",
+    "description": "Paper 2 Table 2 baseline: Shift-based Hier-CliffordNet S={1,2,4,8} (GGR block)",
+    "track": "Track0-Repro",
+    "gpu_id": 0,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2921.47,
+    "wall_time_min": 48.69,
+    "best_val_acc1_pct": 78.26,
+    "overrides": [
+      "model.size=rolling_hier_s4"
+    ],
+    "model_size": "rolling_hier_s4",
+    "log_path": "<runs_root>/cifar100/w1_repro_rolling_hier_s4/stdout.log"
+  },
+  {
+    "name": "w1_repro_subspace_hier_k2",
+    "description": "Paper 2 Table 2: Hier-Subspace-CAN uniform k=2",
+    "track": "Track0-Repro",
+    "gpu_id": 1,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1928.59,
+    "wall_time_min": 32.14,
+    "best_val_acc1_pct": 77.33,
+    "overrides": [
+      "model.size=subspace_hier_k2"
+    ],
+    "model_size": "subspace_hier_k2",
+    "log_path": "<runs_root>/cifar100/w1_repro_subspace_hier_k2/stdout.log"
+  },
+  {
+    "name": "w1_repro_subspace_hier_k4",
+    "description": "Paper 2 Table 2 & 4: Hier-Subspace-CAN uniform k=4 (Full: Inner + Wedge)",
+    "track": "Track0-Repro",
+    "gpu_id": 2,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1936.58,
+    "wall_time_min": 32.28,
+    "best_val_acc1_pct": 78.33,
+    "overrides": [
+      "model.size=subspace_hier_k4"
+    ],
+    "model_size": "subspace_hier_k4",
+    "log_path": "<runs_root>/cifar100/w1_repro_subspace_hier_k4/stdout.log"
+  },
+  {
+    "name": "w1_repro_subspace_hier_244",
+    "description": "Paper 2 Table 3 & 4: Hier-Subspace-CAN progressive hybrid k=(2,4,4)",
+    "track": "Track0-Repro",
+    "gpu_id": 3,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1904.19,
+    "wall_time_min": 31.74,
+    "best_val_acc1_pct": 77.54,
+    "overrides": [
+      "model.size=subspace_hier_244"
+    ],
+    "model_size": "subspace_hier_244",
+    "log_path": "<runs_root>/cifar100/w1_repro_subspace_hier_244/stdout.log"
+  },
+  {
+    "name": "w1_ablate_k4_inner_paper",
+    "description": "Paper 2 Table 4 unaligned Inner-only (0.788M, -30% fewer params than Full k=4)",
+    "track": "Track1-Deconfound",
+    "gpu_id": 4,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1882.38,
+    "wall_time_min": 31.37,
+    "best_val_acc1_pct": 76.75,
+    "overrides": [
+      "model.size=subspace_hier_k4_inner"
+    ],
+    "model_size": "subspace_hier_k4_inner",
+    "log_path": "<runs_root>/cifar100/w1_ablate_k4_inner_paper/stdout.log"
+  },
+  {
+    "name": "w1_ctrl1_k4_inner_wide_isoparam",
+    "description": "Control 1: Strict Iso-Param (~1.12M) Inner-only / SwiGLU control (removes +42% param confound)",
+    "track": "Track1-Deconfound",
+    "gpu_id": 5,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1696.75,
+    "wall_time_min": 28.28,
+    "best_val_acc1_pct": 76.91,
+    "overrides": [
+      "model.size=subspace_hier_k4_inner_wide"
+    ],
+    "model_size": "subspace_hier_k4_inner_wide",
+    "log_path": "<runs_root>/cifar100/w1_ctrl1_k4_inner_wide_isoparam/stdout.log"
+  },
+  {
+    "name": "w1_ctrl2a_k4_symmetric_isoparam",
+    "description": "Control 2a: Strict Iso-Param (1.120M) Symmetric Off-Diagonal (u_i v_j + u_j v_i) vs Wedge",
+    "track": "Track1-Deconfound",
+    "gpu_id": 6,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1999.83,
+    "wall_time_min": 33.33,
+    "best_val_acc1_pct": 77.4,
+    "overrides": [
+      "model.size=subspace_hier_k4_sym"
+    ],
+    "model_size": "subspace_hier_k4_sym",
+    "log_path": "<runs_root>/cifar100/w1_ctrl2a_k4_symmetric_isoparam/stdout.log"
+  },
+  {
+    "name": "w1_ctrl2b_k4_bilinear_isoparam",
+    "description": "Control 2b: Strict Iso-Param (1.120M) Raw Asymmetric Bilinear (u_i v_j) without skew-symmetry",
+    "track": "Track1-Deconfound",
+    "gpu_id": 7,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1898.79,
+    "wall_time_min": 31.65,
+    "best_val_acc1_pct": 78.07,
+    "overrides": [
+      "model.size=subspace_hier_k4_bilinear"
+    ],
+    "model_size": "subspace_hier_k4_bilinear",
+    "log_path": "<runs_root>/cifar100/w1_ctrl2b_k4_bilinear_isoparam/stdout.log"
+  }
+]

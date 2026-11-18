@@ -13,8 +13,11 @@ import wandb
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint, RichProgressBar
 from lightning.pytorch.loggers import WandbLogger
 
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+
 from cliffordnet.checkpointing import PreemptionCheckpoint, resolve_resume_checkpoint
 from cliffordnet.config import Config, config_to_dict, dump_config, load_config, write_config
+from cliffordnet.data_cifar import CIFAR100_MEAN, CIFAR100_STD, CIFAR100DataModule
 from cliffordnet.resources import (
     detect_resources,
     global_rank,
@@ -121,15 +124,29 @@ def _fit_once(
     computed: dict[str, Any],
     resume_path: str | None,
 ) -> None:
-    data = ImageNet1kDataModule(
-        nfs_data_dir=config.data.data_dir,
-        batch_size=config.training.batch_size,
-        num_workers=computed["num_workers"],
-    )
+    dataset_name = config.data.dataset.lower()
+    if dataset_name == "cifar100":
+        data = CIFAR100DataModule(
+            data_dir=config.data.data_dir,
+            batch_size=config.training.batch_size,
+            num_workers=computed["num_workers"],
+            image_size=config.data.image_size,
+        )
+        ds_mean, ds_std = CIFAR100_MEAN, CIFAR100_STD
+    elif dataset_name in ("imagenet1k", "imagenet"):
+        data = ImageNet1kDataModule(
+            nfs_data_dir=config.data.data_dir,
+            batch_size=config.training.batch_size,
+            num_workers=computed["num_workers"],
+        )
+        ds_mean, ds_std = IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+    else:
+        raise ValueError(f"Unsupported dataset: {config.data.dataset!r}")
 
     model = CliffordNetLightning(
         model_size=config.model.size,
         num_classes=config.data.num_classes,
+        img_size=config.data.image_size,
         learning_rate=computed["learning_rate"],
         weight_decay=config.optim.weight_decay,
         max_epochs=config.training.max_epochs,
@@ -139,12 +156,16 @@ def _fit_once(
         mixup_switch_prob=config.recipe.mixup_switch_prob,
         ema_decay=config.recipe.ema_decay,
         wedge_mode=config.model.wedge_mode,
+        backend=config.model.backend,
+        compile_model=config.model.compile,
         ortho_weight=config.model.ortho_weight,
         enable_diagnostics=config.model.enable_diagnostics,
         diag_log_interval=config.model.diag_log_interval,
         label_smoothing=config.recipe.label_smoothing,
         warmup_epochs=config.recipe.warmup_epochs,
         eta_min=config.recipe.eta_min,
+        dataset_mean=ds_mean,
+        dataset_std=ds_std,
     )
 
     callbacks = [
@@ -200,6 +221,15 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
     sync_file = run_dir / ".auto_batch_size"
     env_world_size = int(os.environ.get("WORLD_SIZE", "1"))
 
+    model_kwargs = _model_kwargs_for_size(
+        config.model.size,
+        num_classes=config.data.num_classes,
+        img_size=config.data.image_size,
+        wedge_mode=config.model.wedge_mode,
+        backend=config.model.backend,
+    )
+    input_shape = (3, config.data.image_size, config.data.image_size)
+
     if env_world_size > 1:
         rank = global_rank()
         candidate_file = run_dir / f".auto_batch_size.rank{rank}"
@@ -208,10 +238,11 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
         )
         detected = auto_find_batch_size(
             model_cls=model_cls_for_size(config.model.size),
-            model_kwargs=_model_kwargs_for_size(config.model.size),
+            model_kwargs=model_kwargs,
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,
             safety_factor=config.runtime.auto_batch.safety_factor,
+            input_shape=input_shape,
             device=device,
         )
         candidate_file.write_text(str(detected), encoding="utf-8")
@@ -248,10 +279,11 @@ def _resolve_auto_batch(config: Config, run_dir: Path) -> None:
         )
         detected = auto_find_batch_size(
             model_cls=model_cls_for_size(config.model.size),
-            model_kwargs=_model_kwargs_for_size(config.model.size),
+            model_kwargs=model_kwargs,
             max_batch_size=config.runtime.auto_batch.max_batch_size,
             min_batch_size=config.runtime.auto_batch.min_batch_size,
             safety_factor=config.runtime.auto_batch.safety_factor,
+            input_shape=input_shape,
             device=device,
         )
         sync_file.write_text(str(detected), encoding="utf-8")

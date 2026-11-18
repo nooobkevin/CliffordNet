@@ -1,0 +1,58 @@
+[
+  {
+    "name": "w1_repro_rolling_hier_s4",
+    "track": "Track0-Repro",
+    "description": "Paper 2 Table 2 baseline: Shift-based Hier-CliffordNet S={1,2,4,8} (GGR block)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=rolling_hier_s4"]
+  },
+  {
+    "name": "w1_repro_subspace_hier_k2",
+    "track": "Track0-Repro",
+    "description": "Paper 2 Table 2: Hier-Subspace-CAN uniform k=2",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k2"]
+  },
+  {
+    "name": "w1_repro_subspace_hier_k4",
+    "track": "Track0-Repro",
+    "description": "Paper 2 Table 2 & 4: Hier-Subspace-CAN uniform k=4 (Full: Inner + Wedge)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4"]
+  },
+  {
+    "name": "w1_repro_subspace_hier_244",
+    "track": "Track0-Repro",
+    "description": "Paper 2 Table 3 & 4: Hier-Subspace-CAN progressive hybrid k=(2,4,4)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_244"]
+  },
+  {
+    "name": "w1_ablate_k4_inner_paper",
+    "track": "Track1-Deconfound",
+    "description": "Paper 2 Table 4 unaligned Inner-only (0.788M, -30% fewer params than Full k=4)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_inner"]
+  },
+  {
+    "name": "w1_ctrl1_k4_inner_wide_isoparam",
+    "track": "Track1-Deconfound",
+    "description": "Control 1: Strict Iso-Param (~1.12M) Inner-only / SwiGLU control (removes +42% param confound)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_inner_wide"]
+  },
+  {
+    "name": "w1_ctrl2a_k4_symmetric_isoparam",
+    "track": "Track1-Deconfound",
+    "description": "Control 2a: Strict Iso-Param (1.120M) Symmetric Off-Diagonal (u_i v_j + u_j v_i) vs Wedge",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_sym"]
+  },
+  {
+    "name": "w1_ctrl2b_k4_bilinear_isoparam",
+    "track": "Track1-Deconfound",
+    "description": "Control 2b: Strict Iso-Param (1.120M) Raw Asymmetric Bilinear (u_i v_j) without skew-symmetry",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_bilinear"]
+  }
+]

@@ -33,6 +33,8 @@ class DataConfig:
 class ModelConfig:
     size: str = "12_2"
     wedge_mode: str = "fma"
+    backend: str = "auto"
+    compile: bool = True
     ortho_weight: float = 0.01
     enable_diagnostics: bool = True
     diag_log_interval: int = 100

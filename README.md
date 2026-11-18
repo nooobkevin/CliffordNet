@@ -1,6 +1,18 @@
 # CliffordNet
 
-ImageNet-1k classification using Clifford algebra-based neural networks. Built with PyTorch Lightning.
+ImageNet-1k and CIFAR-100 classification using Clifford algebra-based neural networks, covering both **CliffordNet / CAN** (`arXiv:2601.06793`) and an open-source PyTorch + Fused Triton reproduction and empirical study of **Subspace Clifford Networks** (`arXiv:2610.37226`). Built with PyTorch Lightning.
+
+## Subspace Clifford Networks (`arXiv:2610.37226`) — Reproduction, Triton Kernel & Empirical Study
+
+We reconstructed **Subspace Clifford Networks** to exact parameter parity across all 13 paper configurations, implemented an open-source recomputation-based **Fused Triton Kernel** (`k in {2, 3, 4}`, `fp32`/`bf16`, NCHW & `channels_last`, `torch.compile(fullgraph=True)`), and ran 22 controlled experiments (16 × 200-epoch CIFAR-100 runs + 6 × 10-epoch ImageNet-1k `bf16` DDP runs on 8× NVIDIA H800 GPUs):
+
+- **Full Research Report (Positive & Negative Findings)**: [`docs/subspace_clifford_research_report.md`](./docs/subspace_clifford_research_report.md)
+- **Experimental Design, Per-Epoch CSV Logs & Reproduction Guide**: [`experiments/subspace_study/README.md`](./experiments/subspace_study/README.md)
+- **Structured Benchmark & Evaluation Tables**: [`experiments/subspace_study/results/`](./experiments/subspace_study/results/)
+- **Subspace Models & Scientific Controls (`inner_wide`, `sym_full`, `bilinear_full`, 2×2 Block Factorial)**: [`src/cliffordnet/subspace.py`](./src/cliffordnet/subspace.py)
+- **Fused Recomputation Triton Kernel (`2,994 GB/s` on H800, `2.4x–9.6x` faster than `torch.compile`)**: [`src/cliffordnet/kernels/triton_subspace.py`](./src/cliffordnet/kernels/triton_subspace.py)
+
+![ImageNet-1k 6-Way Trajectory & VRAM](./experiments/subspace_study/figures/imagenet1k_6way_curves.png)
 
 ## Usage
 
@@ -101,11 +113,12 @@ Runs single-GPU tests on each card, then a multi-GPU DDP communication test.
 ## Repository Layout
 
 - `src/cliffordnet/`: package code and canonical runtime
-- `src/cliffordnet/tasks/imagenet1k.py`: ImageNet-1k model/task implementation for CAN issue-driven model changes
-- `configs/`: base config, workload profiles, and W&B sweeps
-- `experiments/legacy/`: old exploratory scripts kept for reference
-- `experiments/sweeps/`: W&B sweep runner
-- `scripts/`: operational scripts that call the canonical entrypoints
+- `src/cliffordnet/subspace.py`: Subspace Clifford Networks (`arXiv:2610.37226`), deconfounding controls (`inner_wide`, `sym_full`, `bilinear_full`, 2×2 `lie_trotter`/`ggr`), extended diagnostics, and `timm` baseline wrappers
+- `src/cliffordnet/kernels/triton_subspace.py`: Recomputation-based fused Triton forward/backward kernels for `k in {2, 3, 4}` (`fp32`/`bf16`, NCHW & `channels_last`, `torch.compile(fullgraph=True)`)
+- `src/cliffordnet/data_cifar.py`: Fast cached CIFAR-100 DataModule and photometric/frequency/phase corruption suite
+- `src/cliffordnet/tasks/imagenet1k.py`: ImageNet-1k / unified Lightning task implementation and model registry
+- `configs/`: base configs (`imagenet1k.yaml`, `cifar100.yaml`), workload profiles, parallel experiment specs, and W&B sweeps
+- `scripts/`: operational, parallel multi-GPU runner, kernel benchmark (`benchmark_subspace_kernel.py`), and corruption evaluation (`eval_corruptions.py`) scripts
 - `docs/model_development.md`: notes for model-structure and stability experiments
 - `docs/h800_acceptance.md`: direct, Slurm, and sweep commands for H800 node acceptance
 

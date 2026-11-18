@@ -1,0 +1,137 @@
+config:
+  run:
+    profile: imagenet1k_h800_probe
+    name: baseline_convnext_atto_10ep
+    output_dir: <runs_root>/imagenet1k_scale
+    seed: 42
+    tags:
+    - imagenet1k
+    - h800
+    - probe
+    - subspace
+    notes: null
+  data:
+    dataset: imagenet1k
+    dataset_id: ILSVRC/imagenet-1k
+    data_dir: <imagenet1k_dir>
+    num_workers: 16
+    image_size: 224
+    num_classes: 1000
+  model:
+    size: baseline_convnext_atto
+    wedge_mode: fma
+    backend: auto
+    compile: true
+    ortho_weight: 0.0
+    enable_diagnostics: true
+    diag_log_interval: 100
+  recipe:
+    mixup_alpha: 0.8
+    cutmix_alpha: 1.0
+    mixup_prob: 1.0
+    mixup_switch_prob: 0.5
+    label_smoothing: 0.1
+    ema_decay: 0.999
+    warmup_epochs: 2
+    eta_min: 1.0e-05
+  optim:
+    lr: null
+    base_lr: 0.001
+    base_global_batch_size: 1024
+    scale_lr: true
+    weight_decay: 0.05
+  training:
+    batch_size: 512
+    target_global_batch_size: 1024
+    accumulate_grad_batches: 1
+    max_epochs: 10
+    val_check_interval: 1.0
+    gradient_clip_val: 1.0
+    limit_train_batches: null
+    limit_val_batches: null
+    log_every_n_steps: 25
+  runtime:
+    accelerator: gpu
+    devices: 2
+    num_nodes: 1
+    strategy: ddp
+    precision: bf16-mixed
+    deterministic: false
+    benchmark: true
+    matmul_precision: high
+    auto_batch:
+      enabled: false
+      min_batch_size: 8
+      max_batch_size: 1024
+      safety_factor: 0.92
+    oom_retries: 1
+    preemption_checkpoint: true
+  checkpoint:
+    resume: auto
+    monitor: val/acc1
+    mode: max
+    save_top_k: 2
+    save_last: true
+    filename: '{epoch}-{val/acc1:.4f}'
+    every_n_train_steps: null
+  wandb:
+    enabled: true
+    project: CliffordNet-Subspace-IN1K
+    entity: null
+    mode: offline
+    group: null
+    log_model: false
+    save_manifest_artifact: false
+    tags: []
+  slurm:
+    account: null
+    partition: null
+    qos: null
+    nodes: 1
+    gpus_per_node: 1
+    gpus_per_task: '1'
+    gpu_type: null
+    cpus_per_task: auto
+    mem_per_gpu: null
+    time: 04:00:00
+    job_name: null
+    nodelist: null
+    exclude: null
+    constraint: null
+    output: null
+    error: null
+    script_dir: ./outputs/slurm
+    command_prefix: uv run python
+    torchrun_prefix: uv run torchrun
+    use_torchrun: true
+    master_port: 29500
+    srun_args: []
+    extra_directives: []
+    env: {}
+resources:
+  hostname: <h800-node>
+  cpu_count: 224
+  cuda_available: true
+  visible_devices: 2
+  gpus:
+  - index: 0
+    name: NVIDIA H800
+    total_memory_gb: 79.18
+  - index: 1
+    name: NVIDIA H800
+    total_memory_gb: 79.18
+  slurm: {}
+computed:
+  devices: 2
+  num_nodes: 1
+  world_size: 2
+  num_workers: 16
+  micro_global_batch_size: 1024
+  accumulate_grad_batches: 1
+  effective_global_batch_size: 1024
+  learning_rate: 0.001
+env:
+  git_commit: 24d58f93b0b60b772ee6f55714a75652d14a2d26
+  git_dirty: true
+  slurm_job_id: null
+  wandb_mode: offline

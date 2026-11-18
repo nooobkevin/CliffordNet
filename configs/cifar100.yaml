@@ -1,0 +1,88 @@
+run:
+  profile: cifar100
+  name: null
+  output_dir: ./outputs/cifar100
+  seed: 42
+  tags: [cifar100, subspace_repro]
+
+data:
+  dataset: cifar100
+  dataset_id: cifar100
+  data_dir: ./data/cifar100
+  num_workers: 4
+  image_size: 32
+  num_classes: 100
+
+model:
+  size: subspace_hier_244
+  wedge_mode: fma
+  backend: auto
+  ortho_weight: 0.0
+  enable_diagnostics: true
+  diag_log_interval: 100
+
+recipe:
+  # Exact arXiv:2601.06793 & arXiv:2610.37226 CIFAR-100 training protocol:
+  # 200 epochs, AdamW(lr=1e-3, wd=0.1), cosine annealing, AutoAugment + RandomErasing(0.25),
+  # no Mixup/CutMix/EMA/warmup by default so accuracy & wall-clock match paper tables 1-to-1.
+  mixup_alpha: 0.0
+  cutmix_alpha: 0.0
+  mixup_prob: 0.0
+  mixup_switch_prob: 0.0
+  label_smoothing: 0.0
+  ema_decay: 0.0
+  warmup_epochs: 0
+  eta_min: 0.0
+
+optim:
+  lr: 1.0e-3
+  base_lr: 1.0e-3
+  base_global_batch_size: 128
+  scale_lr: false
+  weight_decay: 0.1
+
+training:
+  batch_size: 128
+  target_global_batch_size: null
+  accumulate_grad_batches: 1
+  max_epochs: 200
+  val_check_interval: 1.0
+  gradient_clip_val: 0.0
+  limit_train_batches: null
+  limit_val_batches: null
+  log_every_n_steps: 50
+
+runtime:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  strategy: auto
+  precision: 32-true
+  deterministic: false
+  benchmark: true
+  matmul_precision: high
+  auto_batch:
+    enabled: false
+    min_batch_size: 32
+    max_batch_size: 512
+  oom_retries: 0
+  preemption_checkpoint: true
+
+checkpoint:
+  resume: auto
+  monitor: val/acc1
+  mode: max
+  save_top_k: 1
+  save_last: true
+  filename: "{epoch}-{val/acc1:.4f}"
+  every_n_train_steps: null
+
+wandb:
+  enabled: true
+  project: CliffordNet-Subspace-CIFAR100
+  entity: null
+  mode: offline
+  group: cifar100_repro
+  log_model: false
+  save_manifest_artifact: false
+  tags: [cifar100]
