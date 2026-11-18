@@ -1,16 +1,16 @@
 # CliffordNet
 
-ImageNet-1k and CIFAR-100 classification using Clifford algebra-based neural networks, covering both **CliffordNet / CAN** (`arXiv:2601.06793`) and an open-source PyTorch + Fused Triton reproduction and empirical study of **Subspace Clifford Networks** (`arXiv:2610.37226`). Built with PyTorch Lightning.
+ImageNet-1k and CIFAR-100 classification with Clifford algebra vision backbones, covering **CliffordNet / CAN** (`arXiv:2601.06793`) and an open-source PyTorch + Triton reproduction and ablation study of **Subspace Clifford Networks** (`arXiv:2610.37226`). Built with PyTorch Lightning.
 
-## Subspace Clifford Networks (`arXiv:2610.37226`) — Reproduction, Triton Kernel & Empirical Study
+## Subspace Clifford Networks (`arXiv:2610.37226`): reproduction, Triton kernel, and ablations
 
-We reconstructed **Subspace Clifford Networks** to exact parameter parity across all 13 paper configurations, implemented an open-source recomputation-based **Fused Triton Kernel** (`k in {2, 3, 4}`, `fp32`/`bf16`, NCHW & `channels_last`, `torch.compile(fullgraph=True)`), and ran 22 controlled experiments (16 × 200-epoch CIFAR-100 runs + 6 × 10-epoch ImageNet-1k `bf16` DDP runs on 8× NVIDIA H800 GPUs):
+Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstructed Subspace Clifford Networks to exact parameter parity across all 13 hierarchical configurations in the paper, wrote a Triton kernel with backward recomputation (`k in {2, 3, 4}`, `fp32` and `bf16`, NCHW and `channels_last`, `torch.compile(fullgraph=True)`), and ran 16 CIFAR-100 runs (200 epochs) plus 6 ImageNet-1k `bf16` DDP runs (10 epochs):
 
-- **Full Research Report (Positive & Negative Findings)**: [`docs/subspace_clifford_research_report.md`](./docs/subspace_clifford_research_report.md)
-- **Experimental Design, Per-Epoch CSV Logs & Reproduction Guide**: [`experiments/subspace_study/README.md`](./experiments/subspace_study/README.md)
-- **Structured Benchmark & Evaluation Tables**: [`experiments/subspace_study/results/`](./experiments/subspace_study/results/)
-- **Subspace Models & Scientific Controls (`inner_wide`, `sym_full`, `bilinear_full`, 2×2 Block Factorial)**: [`src/cliffordnet/subspace.py`](./src/cliffordnet/subspace.py)
-- **Fused Recomputation Triton Kernel (`2,994 GB/s` on H800, `2.4x–9.6x` faster than `torch.compile`)**: [`src/cliffordnet/kernels/triton_subspace.py`](./src/cliffordnet/kernels/triton_subspace.py)
+- Research notes (positive and negative findings): [`docs/subspace_clifford_research_report.md`](./docs/subspace_clifford_research_report.md)
+- Experimental design, per-epoch CSV logs, and reproduction commands: [`experiments/subspace_study/README.md`](./experiments/subspace_study/README.md)
+- Result tables (kernel benchmark, CIFAR-100 corruptions, ImageNet-1k 6-way eval): [`experiments/subspace_study/results/`](./experiments/subspace_study/results/)
+- Subspace models and equal-parameter controls (`inner_wide`, `sym_full`, `bilinear_full`, 2x2 block swap): [`src/cliffordnet/subspace.py`](./src/cliffordnet/subspace.py)
+- Fused Triton kernel (`2,994 GB/s` on H800, `2.4x` to `9.6x` faster than `torch.compile`): [`src/cliffordnet/kernels/triton_subspace.py`](./src/cliffordnet/kernels/triton_subspace.py)
 
 ![ImageNet-1k 6-Way Trajectory & VRAM](./experiments/subspace_study/figures/imagenet1k_6way_curves.png)
 
