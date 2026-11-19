@@ -20,6 +20,7 @@ VALID_CLI_MODES = (
     "inner_wide",
     "sym_full",
     "bilinear_full",
+    "swiglu_wedge",
 )
 VALID_CTX_MODES = ("diff", "abs")
 VALID_WEDGE_MODES = ("fma", "fp32", "naive", "direct_z2", "direct_z2_fma")
@@ -343,7 +344,7 @@ def subspace_gp_pytorch(
     v = (z2_g - z1_g) if ctx_mode == "diff" else z2_g
 
     p_offdiag: torch.Tensor | None = None
-    if cli_mode in ("full", "wedge"):
+    if cli_mode in ("full", "wedge", "swiglu_wedge"):
         vw = z2_g if wedge_mode in ("direct_z2", "direct_z2_fma") else v
         u_i, vw_j, u_j, vw_i = _extract_group_pairs(u, vw, k)
         p_offdiag = _compute_wedge_diff(u_i, vw_j, u_j, vw_i, wedge_mode, target_dtype)
@@ -362,7 +363,7 @@ def subspace_gp_pytorch(
         assert p_offdiag is not None
         return p_offdiag.reshape(B, num_groups * num_pairs, H, W)
 
-    p_inner = F.silu(u * v)
+    p_inner = (F.silu(u) * v) if cli_mode == "swiglu_wedge" else F.silu(u * v)
     if cli_mode in ("inner", "inner_wide"):
         return p_inner.reshape(B, num_groups * k, H, W)
 
@@ -434,6 +435,8 @@ class SubspaceGeometricProduct(nn.Module):
         use_pre_bn: bool = True,
         norm_mode: str = "bn",
         use_global_context: bool = False,
+        ctx_bn: bool = False,
+        proj_bias: bool = False,
     ) -> None:
         super().__init__()
         if k not in VALID_SUBSPACE_K:
@@ -458,6 +461,8 @@ class SubspaceGeometricProduct(nn.Module):
         self.use_pre_bn = use_pre_bn
         self.norm_mode = norm_mode
         self.use_global_context = use_global_context
+        self.use_ctx_bn = ctx_bn
+        self.proj_bias = proj_bias
 
         if cli_mode == "inner_wide":
             self.aligned_dim = compute_inner_wide_aligned_dim(dim, k)
@@ -466,7 +471,7 @@ class SubspaceGeometricProduct(nn.Module):
             self.aligned_dim = math.ceil(dim / k) * k
             num_pairs = (k * (k - 1)) // 2
             num_groups = self.aligned_dim // k
-            if cli_mode in ("full", "sym_full", "bilinear_full"):
+            if cli_mode in ("full", "sym_full", "bilinear_full", "swiglu_wedge"):
                 self.c_out = num_groups * (num_pairs + k)
             elif cli_mode == "wedge":
                 self.c_out = num_groups * num_pairs
@@ -484,7 +489,7 @@ class SubspaceGeometricProduct(nn.Module):
         else:
             self.pre_bn = nn.BatchNorm2d(dim)
 
-        self.get_state_ctx = nn.Conv2d(dim, 2 * self.aligned_dim, kernel_size=1, bias=False)
+        self.get_state_ctx = nn.Conv2d(dim, 2 * self.aligned_dim, kernel_size=1, bias=proj_bias)
         self.ctx_dw = nn.Conv2d(
             self.aligned_dim,
             self.aligned_dim,
@@ -492,6 +497,9 @@ class SubspaceGeometricProduct(nn.Module):
             padding=1,
             groups=self.aligned_dim,
             bias=False,
+        )
+        self.ctx_bn_layer: nn.Module = (
+            nn.BatchNorm2d(self.aligned_dim) if ctx_bn else nn.Identity()
         )
         if use_global_context:
             # Linear-O(N) global mean-field superposition (Paper 1 Sec. 3.4 / 3.7 adapted to subspaces):
@@ -508,7 +516,7 @@ class SubspaceGeometricProduct(nn.Module):
             self.ctx_global_proj = None
             self.global_beta = None
 
-        self.final_proj = nn.Conv2d(self.c_out, dim, kernel_size=1, bias=False)
+        self.final_proj = nn.Conv2d(self.c_out, dim, kernel_size=1, bias=proj_bias)
 
         self._triton_eligible_mode = (
             self.k in (2, 3, 4)
@@ -544,7 +552,7 @@ class SubspaceGeometricProduct(nn.Module):
     def _prepare_streams(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.pre_bn(x)
         z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
-        z2 = self.ctx_dw(z2_prime)
+        z2 = self.ctx_bn_layer(self.ctx_dw(z2_prime)).to(z1.dtype)
         if self.ctx_global_proj is not None and self.global_beta is not None:
             z2_glo = self.ctx_global_proj(z2_prime.mean(dim=(-2, -1), keepdim=True))
             z2 = (z2 + self.global_beta.to(z1.dtype) * z2_glo.to(z1.dtype)).to(z1.dtype)
@@ -640,7 +648,7 @@ class SubspaceGeometricProduct(nn.Module):
             zero = torch.zeros((), device=x.device, dtype=torch.float32)
 
             # Cancellation & off-diagonal magnitudes
-            if self.cli_mode in ("full", "wedge"):
+            if self.cli_mode in ("full", "wedge", "swiglu_wedge"):
                 vw = z2_g if self.wedge_mode in ("direct_z2", "direct_z2_fma") else v
                 u_i, vw_j, u_j, vw_i = _extract_group_pairs(u, vw, self.k)
                 p_offdiag = _compute_wedge_diff(u_i, vw_j, u_j, vw_i, self.wedge_mode, stream_dtype)
@@ -685,7 +693,10 @@ class SubspaceGeometricProduct(nn.Module):
                 wedge_abs_max = zero
 
             # Inner/diagonal magnitude
-            if self.cli_mode in ("full", "inner", "inner_wide", "sym_full", "bilinear_full"):
+            if self.cli_mode == "swiglu_wedge":
+                p_inner = F.silu(u) * v
+                dot_abs_mean = p_inner.float().abs().mean()
+            elif self.cli_mode in ("full", "inner", "inner_wide", "sym_full", "bilinear_full"):
                 p_inner = F.silu(u * v)
                 dot_abs_mean = p_inner.float().abs().mean()
             else:
@@ -963,6 +974,8 @@ class SubspaceCliffordBlock(nn.Module):
         backend: str = "auto",
         norm_mode: str = "bn",
         use_global_context: bool = False,
+        ctx_bn: bool = False,
+        proj_bias: bool = False,
     ) -> None:
         super().__init__()
         if block_style not in VALID_BLOCK_STYLES:
@@ -1006,6 +1019,8 @@ class SubspaceCliffordBlock(nn.Module):
                 use_pre_bn=use_pre_bn,
                 norm_mode=norm_mode,
                 use_global_context=use_global_context,
+                ctx_bn=ctx_bn,
+                proj_bias=proj_bias,
             )
         else:
             self.interaction = RollingGeometricProduct(
@@ -1260,6 +1275,8 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
         backend: str = "auto",
         norm_mode: str = "bn",
         use_global_context: bool = False,
+        ctx_bn: bool = False,
+        proj_bias: bool = False,
     ) -> None:
         super().__init__()
         if len(stage_depths) == 0:
@@ -1354,6 +1371,8 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
                         backend=backend,
                         norm_mode=norm_mode,
                         use_global_context=use_global_context,
+                        ctx_bn=ctx_bn,
+                        proj_bias=proj_bias,
                     )
                 )
                 dp_idx += 1
@@ -1892,6 +1911,71 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
     "baseline_convnext_femto": (
         TimmClassifierWrapper,
         {"timm_name": "convnext_femto", "drop_path_rate": 0.15},
+    ),
+    # ---- First-Principles ImageNet-1k v2 Cumulative Ablation Ladder ----
+    "in1k_v2_rung1_recipe": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_rung2_deadzone": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_atto_k4": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 48,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (48, 96, 192, 440),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_atto_swiglu_k6": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 48,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (48, 96, 192, 408),
+            "subspace_k": (2, 4, 4, 6),
+            "cli_mode": "swiglu_wedge",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
     ),
 }
 

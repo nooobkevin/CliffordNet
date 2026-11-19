@@ -4,7 +4,7 @@ ImageNet-1k and CIFAR-100 classification with Clifford algebra vision backbones,
 
 ## Subspace Clifford Networks (`arXiv:2610.37226`): reproduction, Triton kernel, and ablations
 
-Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstructed Subspace Clifford Networks to exact parameter parity across all 13 hierarchical configurations in the paper, wrote a Triton kernel with backward recomputation (`k in {2, 3, 4}`, `fp32` and `bf16`, NCHW and `channels_last`, `torch.compile(fullgraph=True)`), and ran 24 CIFAR-100 runs (200 epochs) plus 10 ImageNet-1k `bf16` DDP runs (10 and 25 epochs):
+Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstructed Subspace Clifford Networks to exact parameter parity across all 13 hierarchical configurations in the paper, wrote a Triton kernel with backward recomputation (`k in {2, 3, 4}`, `fp32` and `bf16`, NCHW and `channels_last`, `torch.compile(fullgraph=True)`), and ran 24 CIFAR-100 runs (200 epochs) plus 14 ImageNet-1k `bf16` DDP runs (10 and 25 epochs, culminating in `Subspace-CAN-v2` reaching **`67.48%`** at `3.96M` and **`65.59%`** at `3.57M / 0.491 GMACs` vs. `ConvNeXt-Atto`'s `63.27%` at `3.70M / 0.547 GMACs`):
 
 - Research notes (positive and negative findings): [`docs/subspace_clifford_research_report.md`](./docs/subspace_clifford_research_report.md)
 - Experimental design, per-epoch CSV logs, and reproduction commands: [`experiments/subspace_study/README.md`](./experiments/subspace_study/README.md)
@@ -13,6 +13,8 @@ Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstruct
 - Fused Triton kernel (`2,994 GB/s` on H800, `2.4x` to `9.6x` faster than `torch.compile`): [`src/cliffordnet/kernels/triton_subspace.py`](./src/cliffordnet/kernels/triton_subspace.py)
 
 ![ImageNet-1k 6-Way Trajectory & VRAM](./experiments/subspace_study/figures/imagenet1k_6way_curves.png)
+
+![First-Principles v2 Ablation Ladder](./experiments/subspace_study/figures/in1k_v2_ablation_ladder.png)
 
 ## Usage
 

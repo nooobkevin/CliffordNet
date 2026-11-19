@@ -990,8 +990,59 @@ class CliffordNetLightning(L.LightningModule):
     def on_train_batch_start(self, batch, batch_idx):
         self._train_step_start = _time.monotonic()
 
+    def _gpu_preprocess_uint8(self, images: torch.Tensor, train: bool) -> torch.Tensor:
+        """
+        Fast GPU-side float conversion, per-image ColorJitter(0.4, 0.4, 0.4), Normalize,
+        and RandomErasing(p=0.25) when DataLoader transfers compact uint8 tensors (4x smaller IPC/H2D).
+        """
+        if images.dtype != torch.uint8:
+            return images
+        x = images.to(dtype=torch.float32).mul_(1.0 / 255.0)
+        if train:
+            B, _, H, W = x.shape
+            dev = x.device
+            # Per-image brightness, contrast, saturation in [0.6, 1.4] matching torchvision ColorJitter(0.4, 0.4, 0.4)
+            b_fac = torch.empty((B, 1, 1, 1), device=dev, dtype=torch.float32).uniform_(0.6, 1.4)
+            c_fac = torch.empty((B, 1, 1, 1), device=dev, dtype=torch.float32).uniform_(0.6, 1.4)
+            s_fac = torch.empty((B, 1, 1, 1), device=dev, dtype=torch.float32).uniform_(0.6, 1.4)
+            x = (x * b_fac).clamp_(0.0, 1.0)
+            gray_mean = (
+                x[:, 0:1] * 0.2989 + x[:, 1:2] * 0.5870 + x[:, 2:3] * 0.1140
+            ).mean(dim=(-2, -1), keepdim=True)
+            x = (gray_mean + c_fac * (x - gray_mean)).clamp_(0.0, 1.0)
+            gray = x[:, 0:1] * 0.2989 + x[:, 1:2] * 0.5870 + x[:, 2:3] * 0.1140
+            x = (gray + s_fac * (x - gray)).clamp_(0.0, 1.0)
+
+        x = (x - self.inv_mean) / self.inv_std
+
+        if train:
+            B, _, H, W = x.shape
+            dev = x.device
+            erase_mask = torch.rand((B,), device=dev) < 0.25
+            if erase_mask.any():
+                area = float(H * W)
+                target_area = torch.empty((B,), device=dev).uniform_(0.02, 0.33) * area
+                log_ratio = torch.empty((B,), device=dev).uniform_(math.log(0.3), math.log(3.3))
+                aspect = torch.exp(log_ratio)
+                eh = torch.round(torch.sqrt(target_area * aspect)).long().clamp(1, H)
+                ew = torch.round(torch.sqrt(target_area / aspect)).long().clamp(1, W)
+                top = (torch.rand((B,), device=dev) * (H - eh + 1).float()).long()
+                left = (torch.rand((B,), device=dev) * (W - ew + 1).float()).long()
+                yy = torch.arange(H, device=dev).view(1, H, 1)
+                xx = torch.arange(W, device=dev).view(1, 1, W)
+                rect = (
+                    erase_mask.view(B, 1, 1)
+                    & (yy >= top.view(B, 1, 1))
+                    & (yy < (top + eh).view(B, 1, 1))
+                    & (xx >= left.view(B, 1, 1))
+                    & (xx < (left + ew).view(B, 1, 1))
+                )
+                x = x.masked_fill(rect.unsqueeze(1), 0.0)
+        return x
+
     def training_step(self, batch, batch_idx):
         images, labels = batch
+        images = self._gpu_preprocess_uint8(images, train=True)
         if self.mixup_fn is not None:
             images, labels = self.mixup_fn(images, labels)
             hard_labels = labels.argmax(dim=1)
@@ -1202,6 +1253,7 @@ class CliffordNetLightning(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
+        images = self._gpu_preprocess_uint8(images, train=False)
         x_cl = images.contiguous(memory_format=torch.channels_last)
         outputs = self._validation_model()(x_cl)
         loss = self.val_criterion(outputs, labels)
@@ -1493,18 +1545,14 @@ class ImageNet1kDataModule(L.LightningDataModule):
                 transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandAugment(num_ops=2, magnitude=9),
-                transforms.ColorJitter(0.4, 0.4, 0.4),
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD),
-                transforms.RandomErasing(p=0.25),
+                transforms.PILToTensor(),
             ]
         )
         val_tf = transforms.Compose(
             [
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD),
+                transforms.PILToTensor(),
             ]
         )
 

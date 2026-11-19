@@ -385,6 +385,32 @@ class TestSubspaceModels(unittest.TestCase):
             diags = model.forward_diagnostics(x)
             self.assertTrue(all(v.item() == 0 for k, v in diags.items() if k.endswith("health/nan_count")))
 
+    def test_07_v2_deadzone_fix_presets_and_gpu_uint8_preprocess(self) -> None:
+        from cliffordnet.subspace import SUBSPACE_MODEL_BUILDERS
+        from cliffordnet.tasks.imagenet1k import CliffordNetLightning
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        x = torch.randn(2, 3, 224, 224, device=device)
+        for preset, max_params_m in (
+            ("in1k_v2_rung2_deadzone", 4.00),
+            ("in1k_v2_atto_k4", 3.696),
+            ("in1k_v2_atto_swiglu_k6", 3.696),
+        ):
+            model = SUBSPACE_MODEL_BUILDERS[preset](num_classes=1000, img_size=224).to(device)
+            n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            self.assertLessEqual(n_params / 1e6, max_params_m, msg=preset)
+            logits = model(x)
+            self.assertEqual(logits.shape, (2, 1000))
+            logits.sum().backward()
+
+        lit = CliffordNetLightning(model_size="probe_xs", compile_model=False, ema_decay=0.0).to(device)
+        u8 = torch.randint(0, 256, (4, 3, 224, 224), device=device, dtype=torch.uint8)
+        out_train = lit._gpu_preprocess_uint8(u8, train=True)
+        out_val = lit._gpu_preprocess_uint8(u8, train=False)
+        self.assertEqual(out_train.dtype, torch.float32)
+        self.assertFalse(torch.isnan(out_train).any().item())
+        self.assertFalse(torch.isnan(out_val).any().item())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
