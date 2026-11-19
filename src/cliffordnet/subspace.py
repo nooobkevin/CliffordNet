@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.layers import DropPath, trunc_normal_
 
-VALID_SUBSPACE_K = (2, 3, 4)
+VALID_SUBSPACE_K = (2, 3, 4, 6, 8)
 VALID_CLI_MODES = (
     "full",
     "wedge",
@@ -26,15 +26,18 @@ VALID_WEDGE_MODES = ("fma", "fp32", "naive", "direct_z2", "direct_z2_fma")
 VALID_BACKENDS = ("auto", "pytorch", "triton")
 VALID_BLOCK_STYLES = ("lie_trotter", "ggr")
 VALID_INTERACTION_TYPES = ("subspace", "rolling")
+VALID_NORM_MODES = ("bn", "ln2d", "subspace_rms")
 
 # Off-diagonal index pairs per subspace dimension k (arXiv:2610.37226 Sec. 3.3.2):
 #   k=2: 2D signed area [(0, 1)]
 #   k=3: cyclic 3D cross-product convention [(0, 1), (1, 2), (2, 0)]
-#   k=4: lexicographic 4D bivector planes [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+#   k>=4: lexicographic bivector planes [(i, j) for 0 <= i < j < k]
 SUBSPACE_OFFDIAG_PAIRS: dict[int, tuple[tuple[int, int], ...]] = {
     2: ((0, 1),),
     3: ((0, 1), (1, 2), (2, 0)),
-    4: ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)),
+    4: tuple((i, j) for i in range(4) for j in range(i + 1, 4)),
+    6: tuple((i, j) for i in range(6) for j in range(i + 1, 6)),
+    8: tuple((i, j) for i in range(8) for j in range(i + 1, 8)),
 }
 
 _TRITON_SUBSPACE_FN: Callable[..., torch.Tensor] | None = None
@@ -204,6 +207,7 @@ class SpatialDiffusion(nn.Module):
         dim: int,
         kernel_size: int = 5,
         layer_scale_init_value: float = 1e-5,
+        norm_type: str = "bn",
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -216,7 +220,7 @@ class SpatialDiffusion(nn.Module):
             groups=dim,
             bias=False,
         )
-        self.bn = nn.BatchNorm2d(dim)
+        self.bn: nn.Module = LayerNorm2d(dim) if norm_type == "ln2d" else nn.BatchNorm2d(dim)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((1, dim, 1, 1)))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -253,17 +257,27 @@ def _compute_wedge_diff(
     raise ValueError(f"Invalid wedge_mode: {wedge_mode!r}")
 
 
+SUBSPACE_OFFDIAG_IDX: dict[int, tuple[list[int], list[int]]] = {
+    k_val: ([i for i, _ in pairs], [j for _, j in pairs])
+    for k_val, pairs in SUBSPACE_OFFDIAG_PAIRS.items()
+}
+
+
 def _extract_group_pairs(
     u: torch.Tensor,
     vw: torch.Tensor,
     k: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Extract (u_i, vw_j, u_j, vw_i) tensors of shape (B, G, C(k, 2), H, W)
-    using zero-allocation tuple unbinding (no index tensors, zero graph breaks).
+    Extract (u_i, vw_j, u_j, vw_i) tensors of shape (B, G, C(k, 2), H, W).
+    Uses tuple unbinding for small k <= 4 and single-op list indexing for k >= 6
+    so torch.compile FX graphs stay compact at k=6 (15 pairs) and k=8 (28 pairs).
     """
     if k == 2:
         return u[:, :, 0:1], vw[:, :, 1:2], u[:, :, 1:2], vw[:, :, 0:1]
+    if k >= 6:
+        idx_i, idx_j = SUBSPACE_OFFDIAG_IDX[k]
+        return u[:, :, idx_i], vw[:, :, idx_j], u[:, :, idx_j], vw[:, :, idx_i]
     pairs = SUBSPACE_OFFDIAG_PAIRS[k]
     u_coords = u.unbind(dim=2)
     vw_coords = vw.unbind(dim=2)
@@ -418,6 +432,8 @@ class SubspaceGeometricProduct(nn.Module):
         wedge_mode: str = "fma",
         backend: str = "auto",
         use_pre_bn: bool = True,
+        norm_mode: str = "bn",
+        use_global_context: bool = False,
     ) -> None:
         super().__init__()
         if k not in VALID_SUBSPACE_K:
@@ -430,6 +446,8 @@ class SubspaceGeometricProduct(nn.Module):
             raise ValueError(f"wedge_mode must be in {VALID_WEDGE_MODES}, got {wedge_mode!r}")
         if backend not in VALID_BACKENDS:
             raise ValueError(f"backend must be in {VALID_BACKENDS}, got {backend!r}")
+        if norm_mode not in VALID_NORM_MODES:
+            raise ValueError(f"norm_mode must be in {VALID_NORM_MODES}, got {norm_mode!r}")
 
         self.dim = dim
         self.k = k
@@ -438,6 +456,8 @@ class SubspaceGeometricProduct(nn.Module):
         self.wedge_mode = wedge_mode
         self.backend = backend
         self.use_pre_bn = use_pre_bn
+        self.norm_mode = norm_mode
+        self.use_global_context = use_global_context
 
         if cli_mode == "inner_wide":
             self.aligned_dim = compute_inner_wide_aligned_dim(dim, k)
@@ -457,7 +477,13 @@ class SubspaceGeometricProduct(nn.Module):
 
         self.num_groups = self.aligned_dim // k
 
-        self.pre_bn: nn.Module = nn.BatchNorm2d(dim) if use_pre_bn else nn.Identity()
+        if not use_pre_bn:
+            self.pre_bn: nn.Module = nn.Identity()
+        elif norm_mode == "ln2d":
+            self.pre_bn = LayerNorm2d(dim)
+        else:
+            self.pre_bn = nn.BatchNorm2d(dim)
+
         self.get_state_ctx = nn.Conv2d(dim, 2 * self.aligned_dim, kernel_size=1, bias=False)
         self.ctx_dw = nn.Conv2d(
             self.aligned_dim,
@@ -467,10 +493,26 @@ class SubspaceGeometricProduct(nn.Module):
             groups=self.aligned_dim,
             bias=False,
         )
+        if use_global_context:
+            # Linear-O(N) global mean-field superposition (Paper 1 Sec. 3.4 / 3.7 adapted to subspaces):
+            # mixes each k-subspace of GlobalAvgPool(z2_prime) and superposes into z2 via learned beta.
+            self.ctx_global_proj = nn.Conv2d(
+                self.aligned_dim,
+                self.aligned_dim,
+                kernel_size=1,
+                groups=self.num_groups,
+                bias=False,
+            )
+            self.global_beta = nn.Parameter(0.1 * torch.ones((1, self.aligned_dim, 1, 1)))
+        else:
+            self.ctx_global_proj = None
+            self.global_beta = None
+
         self.final_proj = nn.Conv2d(self.c_out, dim, kernel_size=1, bias=False)
 
         self._triton_eligible_mode = (
-            self.cli_mode in ("full", "inner", "wedge")
+            self.k in (2, 3, 4)
+            and self.cli_mode in ("full", "inner", "wedge")
             and self.wedge_mode in ("fma", "fp32", "naive")
         )
         triton_fn, param_names = _resolve_triton_subspace()
@@ -499,14 +541,30 @@ class SubspaceGeometricProduct(nn.Module):
             self._triton_takes_use_fma = "use_fma" in param_names
         return self._triton_fn is not None
 
+    def _prepare_streams(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        h = self.pre_bn(x)
+        z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
+        z2 = self.ctx_dw(z2_prime)
+        if self.ctx_global_proj is not None and self.global_beta is not None:
+            z2_glo = self.ctx_global_proj(z2_prime.mean(dim=(-2, -1), keepdim=True))
+            z2 = (z2 + self.global_beta.to(z1.dtype) * z2_glo.to(z1.dtype)).to(z1.dtype)
+        if self.norm_mode == "subspace_rms":
+            B, _, H, W = z1.shape
+            dt = z1.dtype
+            z1_g = z1.float().reshape(B, self.num_groups, self.k, H, W)
+            z2_g = z2.float().reshape(B, self.num_groups, self.k, H, W)
+            z1_rms = torch.rsqrt(z1_g.pow(2).mean(dim=2, keepdim=True) + 1e-6)
+            z2_rms = torch.rsqrt(z2_g.pow(2).mean(dim=2, keepdim=True) + 1e-6)
+            z1 = (z1_g * z1_rms).to(dt).reshape(B, self.aligned_dim, H, W)
+            z2 = (z2_g * z2_rms).to(dt).reshape(B, self.aligned_dim, H, W)
+        return z1, z2
+
     def forward(
         self,
         x: torch.Tensor,
         compute_ortho: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        h = self.pre_bn(x)
-        z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
-        z2 = self.ctx_dw(z2_prime)
+        z1, z2 = self._prepare_streams(x)
 
         if self._should_use_triton(x):
             assert self._triton_fn is not None
@@ -560,9 +618,7 @@ class SubspaceGeometricProduct(nn.Module):
     def forward_diagnostics(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Diagnostic-only no-grad pass returning detached scalar tensors."""
         with torch.no_grad():
-            h = self.pre_bn(x)
-            z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
-            z2 = self.ctx_dw(z2_prime)
+            z1, z2 = self._prepare_streams(x)
 
             B, _, H, W = z1.shape
             stream_dtype = z1.dtype
@@ -905,6 +961,8 @@ class SubspaceCliffordBlock(nn.Module):
         layer_scale_init_value: float = 1e-5,
         dw_kernel_size: int = 5,
         backend: str = "auto",
+        norm_mode: str = "bn",
+        use_global_context: bool = False,
     ) -> None:
         super().__init__()
         if block_style not in VALID_BLOCK_STYLES:
@@ -926,6 +984,7 @@ class SubspaceCliffordBlock(nn.Module):
                     dim=dim,
                     kernel_size=dw_kernel_size,
                     layer_scale_init_value=layer_scale_init_value,
+                    norm_type="ln2d" if norm_mode == "ln2d" else "bn",
                 )
                 if use_spatial_diffusion
                 else nn.Identity()
@@ -945,6 +1004,8 @@ class SubspaceCliffordBlock(nn.Module):
                 wedge_mode=wedge_mode,
                 backend=backend,
                 use_pre_bn=use_pre_bn,
+                norm_mode=norm_mode,
+                use_global_context=use_global_context,
             )
         else:
             self.interaction = RollingGeometricProduct(
@@ -1049,6 +1110,8 @@ class IsotropicSubspaceCliffordNet(nn.Module):
         layer_scale_init_value: float = 1e-5,
         dw_kernel_size: int = 5,
         backend: str = "auto",
+        norm_mode: str = "bn",
+        use_global_context: bool = False,
     ) -> None:
         super().__init__()
         if patch_size is None:
@@ -1084,6 +1147,8 @@ class IsotropicSubspaceCliffordNet(nn.Module):
                     layer_scale_init_value=layer_scale_init_value,
                     dw_kernel_size=dw_kernel_size,
                     backend=backend,
+                    norm_mode=norm_mode,
+                    use_global_context=use_global_context,
                 )
                 for i in range(depth)
             ]
@@ -1193,6 +1258,8 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
         layer_scale_init_value: float = 1e-5,
         dw_kernel_size: int = 5,
         backend: str = "auto",
+        norm_mode: str = "bn",
+        use_global_context: bool = False,
     ) -> None:
         super().__init__()
         if len(stage_depths) == 0:
@@ -1285,6 +1352,8 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
                         layer_scale_init_value=layer_scale_init_value,
                         dw_kernel_size=dw_kernel_size,
                         backend=backend,
+                        norm_mode=norm_mode,
+                        use_global_context=use_global_context,
                     )
                 )
                 dp_idx += 1
@@ -1608,6 +1677,109 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "interaction_type": "rolling",
             "block_style": "lie_trotter",
             "shifts": (1, 2, 4),
+        },
+    ),
+    # ---- Wave 3 Follow-Up Extensions: Higher-k Iso-Param Pareto, Norm Invariance & Global Context ----
+    "subspace_hier_k2_isoparam": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "stage_dims": (108, 144, 180),
+            "subspace_k": 2,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_dpr020": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "stage_dims": (96, 128, 160),
+            "subspace_k": 4,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k6_isoparam": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "stage_dims": (84, 120, 144),
+            "subspace_k": 6,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k8_isoparam": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "stage_dims": (80, 104, 136),
+            "subspace_k": 8,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_ln2d": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "norm_mode": "ln2d",
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_rms": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "norm_mode": "subspace_rms",
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_gffn_global": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "use_global_context": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "in1k_subspace_femto_ln2d": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "ln2d",
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "in1k_subspace_femto_gffn": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "in1k_subspace_femto_rms": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "subspace_rms",
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.20,
         },
     ),
     # ---- ROI #2 ImageNet-1k Multi-Stage Scaling Variants (patch_size=4) ----

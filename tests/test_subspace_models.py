@@ -363,6 +363,28 @@ class TestSubspaceModels(unittest.TestCase):
     def test_05_cuda_forward_backward_diagnostics_triton_and_compile(self) -> None:
         test_cuda_forward_backward_diagnostics_triton_and_compile()
 
+    def test_06_wave3_higher_k_norm_and_global_context_extensions(self) -> None:
+        from cliffordnet.subspace import SUBSPACE_MODEL_BUILDERS
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        x = torch.randn(2, 3, 32, 32, device=device)
+        for preset in (
+            "subspace_hier_k2_isoparam",
+            "subspace_hier_k6_isoparam",
+            "subspace_hier_k8_isoparam",
+            "subspace_hier_k4_ln2d",
+            "subspace_hier_k4_rms",
+            "subspace_hier_k4_gffn_global",
+        ):
+            model = SUBSPACE_MODEL_BUILDERS[preset](num_classes=100, img_size=32).to(device)
+            n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            self.assertAlmostEqual(n_params / 1e6, 1.12, delta=0.02, msg=preset)
+            logits, ortho = model(x, compute_ortho=True)
+            self.assertEqual(logits.shape, (2, 100))
+            (logits.sum() + ortho).backward()
+            diags = model.forward_diagnostics(x)
+            self.assertTrue(all(v.item() == 0 for k, v in diags.items() if k.endswith("health/nan_count")))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

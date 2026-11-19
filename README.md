@@ -4,7 +4,7 @@ ImageNet-1k and CIFAR-100 classification with Clifford algebra vision backbones,
 
 ## Subspace Clifford Networks (`arXiv:2610.37226`): reproduction, Triton kernel, and ablations
 
-Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstructed Subspace Clifford Networks to exact parameter parity across all 13 hierarchical configurations in the paper, wrote a Triton kernel with backward recomputation (`k in {2, 3, 4}`, `fp32` and `bf16`, NCHW and `channels_last`, `torch.compile(fullgraph=True)`), and ran 16 CIFAR-100 runs (200 epochs) plus 6 ImageNet-1k `bf16` DDP runs (10 epochs):
+Using an AI coding agent (GitHub Copilot CLI) on an 8x H800 node, we reconstructed Subspace Clifford Networks to exact parameter parity across all 13 hierarchical configurations in the paper, wrote a Triton kernel with backward recomputation (`k in {2, 3, 4}`, `fp32` and `bf16`, NCHW and `channels_last`, `torch.compile(fullgraph=True)`), and ran 24 CIFAR-100 runs (200 epochs) plus 10 ImageNet-1k `bf16` DDP runs (10 and 25 epochs):
 
 - Research notes (positive and negative findings): [`docs/subspace_clifford_research_report.md`](./docs/subspace_clifford_research_report.md)
 - Experimental design, per-epoch CSV logs, and reproduction commands: [`experiments/subspace_study/README.md`](./experiments/subspace_study/README.md)

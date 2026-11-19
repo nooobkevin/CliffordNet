@@ -59,6 +59,7 @@ class OptimConfig:
     base_global_batch_size: int = 1024
     scale_lr: bool = True
     weight_decay: float = 0.05
+    decay_norm_and_bias: bool = False
 
 
 @dataclass
@@ -118,6 +119,9 @@ class WandbConfig:
     log_model: bool | str = False
     save_manifest_artifact: bool = True
     tags: list[str] = field(default_factory=list)
+    swanlab: bool = False
+    swanlab_mode: str = "online"
+    swanlab_workspace: str | None = None
 
 
 @dataclass

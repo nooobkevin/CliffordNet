@@ -164,6 +164,7 @@ def _fit_once(
         label_smoothing=config.recipe.label_smoothing,
         warmup_epochs=config.recipe.warmup_epochs,
         eta_min=config.recipe.eta_min,
+        decay_norm_and_bias=config.optim.decay_norm_and_bias,
         dataset_mean=ds_mean,
         dataset_std=ds_std,
     )
@@ -354,6 +355,18 @@ def _build_logger(
 ):
     if not config.wandb.enabled or config.wandb.mode == "disabled":
         return False
+    if config.wandb.swanlab and global_rank() == 0:
+        try:
+            import swanlab
+
+            swanlab.sync_wandb(
+                mode=config.wandb.swanlab_mode,
+                wandb_run=True,
+                workspace=config.wandb.swanlab_workspace,
+                log_dir=str(run_dir / "swanlog"),
+            )
+        except Exception as exc:
+            print(f"[swanlab] failed to enable sync_wandb: {exc}")
     tags = sorted(set(config.run.tags + config.wandb.tags + [config.run.profile]))
     return WandbLogger(
         project=config.wandb.project,

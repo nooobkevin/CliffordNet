@@ -906,6 +906,7 @@ class CliffordNetLightning(L.LightningModule):
         diag_log_interval=100,
         warmup_epochs=1,
         eta_min=1e-6,
+        decay_norm_and_bias=False,
         dataset_mean=IMAGENET_DEFAULT_MEAN,
         dataset_std=IMAGENET_DEFAULT_STD,
     ):
@@ -1373,24 +1374,32 @@ class CliffordNetLightning(L.LightningModule):
             return res
 
     def configure_optimizers(self):
-        # Separate params: no weight decay for norm layers, biases, and layer scale
-        decay_params = []
-        no_decay_params = []
-        for name, param in self._raw_model.named_parameters():
-            if not param.requires_grad:
-                continue
-            if param.ndim <= 1 or "bias" in name or "norm" in name or "gamma" in name:
-                no_decay_params.append(param)
-            else:
-                decay_params.append(param)
+        if getattr(self.hparams, "decay_norm_and_bias", False):
+            params = [p for p in self._raw_model.parameters() if p.requires_grad]
+            optimizer = torch.optim.AdamW(
+                params,
+                lr=self.hparams.learning_rate,
+                weight_decay=self.hparams.weight_decay,
+            )
+        else:
+            # Separate params: no weight decay for norm layers, biases, and layer scale
+            decay_params = []
+            no_decay_params = []
+            for name, param in self._raw_model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if param.ndim <= 1 or "bias" in name or "norm" in name or "gamma" in name:
+                    no_decay_params.append(param)
+                else:
+                    decay_params.append(param)
 
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": decay_params, "weight_decay": self.hparams.weight_decay},
-                {"params": no_decay_params, "weight_decay": 0.0},
-            ],
-            lr=self.hparams.learning_rate,
-        )
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": decay_params, "weight_decay": self.hparams.weight_decay},
+                    {"params": no_decay_params, "weight_decay": 0.0},
+                ],
+                lr=self.hparams.learning_rate,
+            )
 
         # Linear warmup, then cosine decay to eta_min over
         # the remaining epochs.  Both schedulers step per-step (not per-epoch)

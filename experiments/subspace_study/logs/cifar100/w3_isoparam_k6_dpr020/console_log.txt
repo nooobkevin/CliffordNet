@@ -1,0 +1,59 @@
+[rank: 0] Seed set to 42
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+`Trainer(val_check_interval=1.0)` was configured so validation will run at the end of the training epoch..
+Traceback (most recent call last):
+  File "/usr/bin/nvcc", line 3, in <module>
+    from colorama import Fore, Style
+ModuleNotFoundError: No module named 'colorama'
+swanlab: Tracking run with swanlab version 0.10.6
+swanlab: 💾 Run data saved at 
+<runs_root>/cifar100_wave3/w3_isoparam_k6_dpr020
+/swanlog/run-20261119_045425-gcprbp5p
+swanlab: 📁 View project at 
+https://swanlab.cn/@nooobkevin/CliffordNet-Subspace-CIFAR100
+swanlab: 🚀 View run w3_isoparam_k6_dpr020 at 
+https://swanlab.cn/@nooobkevin/CliffordNet-Subspace-CIFAR100/runs/gcprbp5p
+wandb: WARNING The anonymous setting has no effect and will be removed in a future version.
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id oys0azpk.
+wandb: Tracking run with wandb version 0.25.1
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in <runs_root>/cifar100_wave3/w3_isoparam_k6_dpr020/wandb/offline-run-20261119_045427-oys0azpk
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [2]
+Loading `train_dataloader` to estimate number of stepping batches.
+<repo_root>/.venv/lib/python3.11/site-packages/lightning/pytorch/utilities/_pytree.py:21: `isinstance(treespec, LeafSpec)` is deprecated, use `isinstance(treespec, TreeSpec) and treespec.is_leaf()` instead.
+┃   ┃ Name          ┃ Type                            ┃ Params ┃ Mode  ┃ FLOPs ┃
+│ 0 │ _raw_model    │ HierarchicalSubspaceCliffordNet │  1.1 M │ train │     0 │
+│ 1 │ model         │ OptimizedModule                 │  1.1 M │ train │     0 │
+│ 2 │ criterion     │ CrossEntropyLoss                │      0 │ train │     0 │
+│ 3 │ val_criterion │ CrossEntropyLoss                │      0 │ train │     0 │
+└───┴───────────────┴─────────────────────────────────┴────────┴───────┴───────┘
+Trainable params: 1.1 M                                                         
+Non-trainable params: 0                                                         
+Total params: 1.1 M                                                             
+Total estimated model params size (MB): 4                                       
+Modules in train mode: 151                                                      
+Modules in eval mode: 0                                                         
+Total FLOPs: 0                                                                  
+SLURM auto-requeueing enabled. Setting signal handlers.
+Traceback (most recent call last):
+  File "/usr/bin/nvcc", line 3, in <module>
+    from colorama import Fore, Style
+ModuleNotFoundError: No module named 'colorama'
+`Trainer.fit` stopped: `max_epochs=200` reached.
+Epoch 199/199 ━━━━━━━━━━━━━━━ 390/390 0:00:11 •       33.94it/s v_num: azpk     
+                                                                0.268           
+                                                                0.914 val/loss: 
+                                                                0.874 val/acc1: 
+                                                                0.789 val/acc5: 
+                                                                0.947           
+[1;34mwandb[0m: 
+[1;34mwandb[0m: You can sync this run to the cloud by running:
+[1;34mwandb[0m: [1mwandb sync <runs_root>/cifar100_wave3/w3_isoparam_k6_dpr020/wandb/offline-run-20261119_045427-oys0azpk[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../../../..<runs_root>/cifar100_wave3/w3_isoparam_k6_dpr020/wandb/offline-run-20261119_045427-oys0azpk/logs[0m
+swanlab: 📁 View project at 
+https://swanlab.cn/@nooobkevin/CliffordNet-Subspace-CIFAR100
+swanlab: 🚀 View run w3_isoparam_k6_dpr020 at 
+https://swanlab.cn/@nooobkevin/CliffordNet-Subspace-CIFAR100/runs/gcprbp5p
+swanlab: Upload complete: 8 file(s) (447.8 KB)
