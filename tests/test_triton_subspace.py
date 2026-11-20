@@ -338,6 +338,32 @@ class TestTritonSubspaceKernel(unittest.TestCase):
             y.sum().backward()
         self.assertIsNotNone(x.grad)
 
+    def test_large_bg_exceeding_grid_y_limit(self) -> None:
+        """Regression test: B*G > 65,535 (CUDA gridY cap) must succeed in NCHW, NHWC, and strided."""
+        # Nano Stage 3 shape: B=512, C=832, k=4 -> G=208, B*G=106,496 > 65,535
+        for mem_fmt in (torch.contiguous_format, torch.channels_last):
+            z1 = (
+                torch.randn(512, 832, 7, 7, device="cuda", dtype=torch.bfloat16)
+                .contiguous(memory_format=mem_fmt)
+                .requires_grad_(True)
+            )
+            z2 = (
+                torch.randn(512, 832, 7, 7, device="cuda", dtype=torch.bfloat16)
+                .contiguous(memory_format=mem_fmt)
+                .requires_grad_(True)
+            )
+            y = subspace_gp_triton(z1, z2, k=4, cli_mode="full", ctx_mode="abs", use_fma=True)
+            y.sum().backward()
+            self.assertTrue(y.isfinite().all().item())
+            self.assertIsNotNone(z1.grad)
+            self.assertIsNotNone(z2.grad)
+
+        z1_s = torch.randn(512, 832, 7, 7, device="cuda", dtype=torch.bfloat16).transpose(2, 3).requires_grad_(True)
+        z2_s = torch.randn(512, 832, 7, 7, device="cuda", dtype=torch.bfloat16).transpose(2, 3).requires_grad_(True)
+        y_s = subspace_gp_triton(z1_s, z2_s, k=4, cli_mode="full", ctx_mode="abs", use_fma=True)
+        y_s.sum().backward()
+        self.assertTrue(y_s.isfinite().all().item())
+
     def test_peak_extra_memory_recomputation(self) -> None:
         """Peak extra allocated memory at (64, 128, 64, 64) fp32 k=4 full equals ~320 MiB."""
         b, d_tilde, h, w = 64, 128, 64, 64

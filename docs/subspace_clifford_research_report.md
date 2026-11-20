@@ -175,3 +175,50 @@ Each rung directly tests one step of the derivation:
 3. **`bf16` training needs `fp32` FMA determinants.** Evaluating the wedge determinant in `fp32` registers with FMA inside the `bf16` recomputation Triton kernel (`0.254 ms`, `9.57x` faster than `torch.compile`) eliminates `bf16` cancellation (`0.41%` `<1e-2` in v2).
 4. **Combine `+Subspace-gFFN-G` and rebalanced stage widths `(48, 96, 192, 440)` for ImageNet scale.** Shifting FLOPs from `56x56` to `7x7` with `7x7` spatial diffusion and linear-$O(N)$ global context beats `ConvNeXt-Atto` by `+2.32%` Top-1 at 10.2% lower FLOPs.
 
+## 8. Extended 20-hour H800 campaign (Waves A–D, 20 additional runs, 58 runs total): 100-epoch convergence, dead-zone-fixed falsification, and Pico/Nano scaling instability
+
+To test whether our 25-epoch ImageNet-1k gains hold through full convergence and scale beyond 4M parameters, we ran four additional waves (8 CIFAR-100 v2 backport runs + 12 ImageNet-1k runs up to 100 epochs and 15.6M parameters). Three findings stand out, including two critical negative/falsification results.
+
+### 8.1 Dead-zone decomposition and `100% LayerNorm2d` (Wave B, 25 epochs ImageNet-1k)
+
+| Run (25 ep, Global BS=1024, `bf16-mixed`) | Params | GMACs | 50k Clean Top-1 | Top-5 | Contrast 0.12 | Fog | Gauss | FFT phase | `|W|/|D|` | Eff. Rank | Peak `|wedge|` | `val/loss` NaN |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `in1k_v2_ablate_abs_only_25ep` | 3.944M | 0.737G | **66.45%** | 87.22% | 47.59% | 63.81% | 52.08% | 28.77% | 2.843 | 0.701 | 18,700 | 0 / 25 |
+| `in1k_v2_ablate_ctxbn_diff_25ep` | 3.957M | 0.737G | **66.03%** | 86.92% | 46.29% | 62.94% | 50.41% | 29.80% | 11.370 | 0.677 | 2,677 | 0 / 25 |
+| `in1k_v2_atto_ln2d_25ep` (`100% LN2d`) | **3.573M** | **0.491G** | **66.18%** | 87.04% | **48.45%** | **64.19%** | 51.24% | **30.25%** | 2.911 | **0.728** | **43.8** | **0 / 25** |
+| `in1k_v2_atto_inner_wide_25ep` (0 bivectors) | 3.594M | 0.493G | 65.30% | 86.74% | 46.52% | 62.52% | 49.51% | 27.81% | 0.000 | 0.708 | - | 0 / 25 |
+
+- **Super-additive dead-zone fix.** Switching to `ctx_mode="abs"` alone adds `+1.02%` over Rung 1 (`65.43% -> 66.45%`) by removing $-Z_1^2$ from `SiLU`; adding `ctx_bn + proj_bias` while keeping `diff` adds `+0.60%` (`66.03%`, still carrying $-Z_1^2$ with `|W|/|D|=11.37x`). Combining both in Rung 2 (`67.48%`, `+2.05%`) is super-additive.
+- **`100% LayerNorm2d` breaks the clean-vs-robustness tradeoff and clamps wedge magnitude 80x to 400x.** Replacing `pre_bn`, `SpatialDiffusion` BN, and `ctx_bn` with `LayerNorm2d` in `in1k_v2_atto_ln2d_25ep` (`3.573M`, `0.491G`) raises Clean Top-1 to **`66.18%`** (`+0.59%` over BN `in1k_v2_atto_k4`, `+2.91%` over `ConvNeXt-Atto`), hits **`48.45%`** on `0.12x` low contrast and **`30.25%`** on FFT-Phase, and keeps peak `|wedge|` at **`43.8`** with zero training spikes or validation crashes.
+
+### 8.2 100-epoch ImageNet-1k convergence showdown and dead-zone-fixed falsification (Wave A & Wave C)
+
+| Run (ImageNet-1k 100 ep, Global BS=1024, `bf16`) | Params | GMACs | EMA Top-1 | 50k Clean Top-1 | Top-5 | Contrast 0.12 | Fog | Gauss | FFT phase | `|W|/|D|` | Eff. Rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `in1k_v2_rung2_deadzone_100ep` | 3.957M | 0.737G | **72.92%** | **72.81%** | **91.20%** | **59.26%** | **70.78%** | **59.58%** | 35.63% | 2.399 | 0.733 |
+| `in1k_v2_atto_inner_wide_100ep` (0 bivectors) | 3.594M | 0.493G | **71.33%** | **71.14%** | 90.31% | 54.93% | 69.12% | 56.24% | 34.30% | 0.000 | 0.716 |
+| `in1k_v2_atto_k4_100ep` (`Subspace-CAN-v2`) | **3.573M** | **0.491G** | **71.25%** | **71.08%** | 90.20% | **56.10%** | 68.59% | **57.53%** | 35.78% | 2.421 | **0.751** |
+| `in1k_convnext_atto_100ep` (`timm` baseline) | 3.696M | 0.547G | 71.20% | 71.03% | 90.45% | 54.79% | 68.98% | 57.73% | **46.52%** | - | - |
+
+1. **`Subspace-CAN-v2-Atto` holds its Pareto edge at 100 epochs.** `ConvNeXt-Atto` closes most of the 25-epoch `+2.32%` gap over the last 75 epochs, but `in1k_v2_atto_k4_100ep` still edges it out (`71.25%` vs. `71.20%` EMA; `71.08%` vs. `71.03%` 50k) with 3.3% fewer parameters, 10.2% fewer FLOPs, and `+1.31%` higher `0.12x` low-contrast accuracy. Meanwhile `in1k_v2_rung2_deadzone_100ep` reaches **`72.92%`** under 4.0M parameters.
+2. **Major falsification result: once the dead-zone trap is fixed, equal-parameter `Inner-wide` matches `Full (Wedge + Inner)` on clean Top-1.** Backporting v2 to CIFAR-100 (Wave A, 8 runs) lifted `w4_v2_k4_dpr020` to `79.21%` (`+0.50%`), `w4_v2_k4_ln2d` to `79.46%` (`+1.24%`), and dead-zone-fixed `w4_v2_k4_inner_wide` (zero bivectors) by `+2.64%` to **`79.55%`** (vs. `79.21%` for Full `k=4`). On 100-epoch ImageNet-1k, `in1k_v2_atto_inner_wide_100ep` (`71.33%` EMA / `71.14%` 50k) again matches and slightly edges out `in1k_v2_atto_k4_100ep` (`71.25%` / `71.08%`). This means the large clean-accuracy gap between Full and Inner-wide in v1 (`+1.4%` CIFAR-100, `+2.63%` ImageNet-1k) was largely driven by v1 starving the inner branch. After fixing the dead-zone, the remaining independent contribution of antisymmetric wedge products $u \wedge v$ is **higher representation effective rank (`0.751` vs. `0.716`) and better corruption robustness (`+1.17%` `0.12x` contrast, `+1.29%` Gaussian noise, `+1.48%` FFT-Phase on ImageNet-1k; `+2.89%` to `+3.97%` FFT-Phase on CIFAR-100)**.
+
+### 8.3 Scaling to Pico (~9M) and Nano (~15.6M) exposes quadratic wedge x BatchNorm instability (Wave D, 90 epochs)
+
+| Run (ImageNet-1k 90 ep, Global BS=1024, `bf16`) | Params | GMACs | EMA Val Top-1 | 50k HF-Bicubic Top-1 | Top-5 | Contrast 0.12 | FFT phase | Peak `|wedge|` | `val/loss` NaN epochs | `train/loss` spikes (`>5.8`) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `in1k_v2_pico_k4_90ep` (`BN`, `/dev/shm`) | **8.499M** | **1.319G** | 75.43% | 74.41% | 92.20% | 63.00% | 38.78% | **3,466** | **34 / 90 (38%)** | **91** |
+| `in1k_convnext_pico_90ep` (`LN2d`, HF PIL) | 9.046M | 1.367G | **75.86%** | **75.72%** | 92.85% | 65.96% | **55.25%** | - | **0 / 90** | **0** |
+| `in1k_v2_nano_k4_90ep` (`BN`, `/dev/shm`) | **14.689M** | **2.392G** | 76.85% | 75.94% | 92.93% | 67.21% | 42.70% | **5,156** | **38 / 90 (42%)** | **85** |
+| `in1k_convnext_nano_90ep` (`LN2d`, HF PIL) | 15.594M | 2.446G | **78.10%** | **77.99%** | 94.09% | 70.35% | **59.88%** | - | **0 / 90** | **0** |
+
+Two critical scaling and systems findings emerged from Wave D:
+1. **Quadratic wedge x BatchNorm instability above 8M parameters.** While `ConvNeXt-Pico` and `ConvNeXt-Nano` (`LayerNorm2d`) trained with zero `NaN`s and zero loss spikes, both `BN`-based `Subspace-CAN-v2-Pico` and `Nano` suffered `85` to `91` training loss spikes (`>5.8`) and **`val/loss = NaN` on `38%` to `42%` of validation epochs** (`34/90` and `38/90`). Because $u \wedge v$ is quadratic (degree-2) and `BatchNorm2d` only normalizes across the batch rather than bounding individual outlier tokens, single-token outliers square to `|wedge| = 3,466 to 5,156`, corrupting `BatchNorm` running variance until cosine LR decays late in training. Comparing this directly against Wave B's `in1k_v2_atto_ln2d_25ep` (peak `|wedge| = 43.8`, `0` NaNs, `0` spikes) shows that **scaling Subspace Clifford Networks to >=8M parameters requires replacing `BatchNorm2d` with per-token `LayerNorm2d` (or unit-sphere `Subspace-RMS` normalization)**.
+2. **Systems and kernel profiling lessons (honest methodology notes):**
+   - *Triton `gridY` cap fix:* At `B=512, C=832, k=4` (`Nano` Stage 3), `B * G = 106,496` exceeded CUDA's `65,535` `gridY` hardware cap; moving `B * G` to `gridX` (`2^31 - 1` limit) in `triton_subspace.py` fixed it permanently (covered by `test_large_bg_exceeding_grid_y_limit`).
+   - *PyTorch Profiler (`scripts/profile_bottleneck.py`):* On `in1k_v2_pico_k4` (`bs=256, compile=True`), launch/sync idle gap is only `3.13 ms / 80.96 ms` (`3.9%`), whereas `.chunk(2, dim=1)` on `channels_last` tensors breaks dense NHWC contiguity and forces fallback to `_subspace_gp_{fwd,bwd}_strided_kernel` + `aten::copy_` (`25.8%` of total CUDA time), alongside `convolution_backward` + `cudnn_convolution` (`37.7%`).
+   - *`/dev/shm` square-resize caveat:* Training `v2_pico` and `v2_nano` from a pre-decoded `256x256` `/dev/shm` `uint8` RAM cache eliminated CPU JPEG bottlenecks (`sm=86% to 98%`, `~500W/GPU`), but squashing images to square `256x256` with GPU `bilinear` `grid_sample` introduced a `~0.9% to 1.0%` gap between training-time EMA validation (`75.43%` / `76.85%`) and aspect-ratio-preserving `BICUBIC` HuggingFace validation (`74.41%` / `75.94%`). Future RAM caches should preserve aspect ratio or use `RandAugment` + `BICUBIC`.
+
+![ImageNet-1k 100-Epoch Convergence, Scaling Pareto, BN vs LN2d Stability, and Wedge Falsification](../experiments/subspace_study/figures/in1k_100ep_convergence_and_scaling.png)
+
+

@@ -1,6 +1,6 @@
 # Subspace Clifford Networks (`arXiv:2610.37226`) and CliffordNet (`arXiv:2601.06793`): experimental design, logs, and reproduction guide
 
-This folder holds the experimental design, reproduction commands, result tables, 38 per-epoch CSV trajectories (`epoch_metrics.csv`), sanitized `run_manifest.yaml` files, console logs, and plots from our empirical study of CliffordNet (`arXiv:2601.06793`) and Subspace Clifford Networks (`arXiv:2610.37226`).
+This folder holds the experimental design, reproduction commands, result tables, 58 per-epoch CSV trajectories (32 CIFAR-100 + 26 ImageNet-1k), sanitized `run_manifest.yaml` files, console logs, and 6 plots from our empirical study of CliffordNet (`arXiv:2601.06793`) and Subspace Clifford Networks (`arXiv:2610.37226`).
 
 > **Note on AI-assisted execution:** The implementation (`src/cliffordnet/subspace.py`, `src/cliffordnet/kernels/triton_subspace.py`), unit tests, and 8x H800 runs in this study were built and executed using an AI coding agent (GitHub Copilot CLI) under `@nooobkevin`'s direction. All logs, manifests, and test scripts are archived here for direct verification.
 
@@ -17,21 +17,23 @@ experiments/subspace_study/
 │   ├── imagenet1k_6way_curves.png        # ImageNet-1k 10-ep 6-way curves & per-GPU VRAM
 │   ├── cifar100_deconfounding_matrix.png # CIFAR-100 iso-param controls & Fourier phase test
 │   ├── h800_triton_kernel_benchmark.png  # H800 Eager vs torch.compile vs Triton benchmark
-│   ├── wave3_and_in1k_25ep_findings.png  # Equal-param k=2..8 sweep & 25-ep ImageNet-1k v1 crossover
-│   └── in1k_v2_ablation_ladder.png       # First-principles v2 dead-zone fix (67.48% & 65.59% @ 0.491G)
+│   ├── wave3_and_in1k_25ep_findings.png        # Equal-param k=2..8 sweep & 25-ep ImageNet-1k v1 crossover
+│   ├── in1k_v2_ablation_ladder.png             # First-principles v2 dead-zone fix (67.48% & 65.59% @ 0.491G)
+│   └── in1k_100ep_convergence_and_scaling.png  # 100-ep convergence, Atto->Pico->Nano Pareto, BN vs LN2d NaNs & wedge falsification
 ├── results/
 │   ├── kernel_benchmark_h800.{json,md}
-│   ├── summary_cifar100_wave1.{json,md}
-│   ├── summary_cifar100_wave2.{json,md}
-│   ├── summary_cifar100_wave3.{json,md}
+│   ├── summary_cifar100_wave{1,2,3,4}.{json,md}
 │   ├── cifar100_corruptions_and_diagnostics.{json,md}
-│   ├── cifar100_wave3_corruptions.{json,md}
+│   ├── cifar100_wave{3,4}_corruptions.{json,md}
 │   ├── summary_imagenet1k_6way_complete.{json,md}
 │   ├── summary_imagenet1k_25ep.{json,md}
-│   └── summary_imagenet1k_v2.{json,md}
+│   ├── summary_imagenet1k_v2.{json,md}
+│   ├── summary_in1k_waveB.{json,md}
+│   ├── summary_in1k_waveC.{json,md}
+│   └── summary_in1k_waveD.json
 └── logs/
-    ├── cifar100/<24_run_folders>/        # epoch_metrics.csv (200 ep) + run_manifest.yaml + console_log.txt
-    └── imagenet1k/<14_run_folders>/      # epoch_metrics.csv (10 & 25 ep) + run_manifest.yaml + console_log.txt
+    ├── cifar100/                               # 32 CIFAR-100 runs (200 ep CSVs + manifests)
+    └── imagenet1k/                             # 26 ImageNet-1k runs (10, 25, 90 & 100 ep CSVs + manifests)
 ```
 
 Each `epoch_metrics.csv` records:

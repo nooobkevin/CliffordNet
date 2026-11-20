@@ -1,0 +1,58 @@
+[
+  {
+    "name": "w4_v2_k4_dpr020",
+    "track": "Track9-v2-CIFAR100",
+    "description": "Subspace-CAN-v2 k=4 (ctx_bn + abs + proj_bias, dpr=0.20, 1.128M) vs Wave 3 v1 anchor (78.71%)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_244_allwd",
+    "track": "Track9-v2-CIFAR100",
+    "description": "Subspace-CAN-v2 Hybrid (2,4,4) + CAN all-wd (1.100M) vs Wave 3 (79.72%) & Paper (80.25%)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_244_v2", "optim.decay_norm_and_bias=true", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k6_dpr020",
+    "track": "Track9-v2-CIFAR100",
+    "description": "Subspace-CAN-v2 iso-param k=6 (15 bivectors, 1.121M, dpr=0.20) vs Wave 3 v1 k=6 (79.05%)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k6_v2", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k4_inner_wide",
+    "track": "Track9-v2-Deconfound",
+    "description": "Dead-zone-fixed iso-param Inner-wide control (1.138M, dpr=0.20) testing wedge value after fix",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_inner_wide", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k4_sym",
+    "track": "Track9-v2-Deconfound",
+    "description": "Dead-zone-fixed iso-param Symmetric off-diag control (1.128M, dpr=0.20)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_sym", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k4_ln2d",
+    "track": "Track9-v2-NormInvariance",
+    "description": "100% LayerNorm2d + v2 dead-zone fix (ctx_ln2d + abs + proj_bias, 1.128M, dpr=0.20)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_ln2d", "model.compile=false", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k4_ctxbn_diff",
+    "track": "Track9-v2-Mechanism",
+    "description": "Isolates ctx_bn + diff (balanced discrete gradient z2-z1, 1.128M) vs ctx_bn + abs",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_ctxbn_diff", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  },
+  {
+    "name": "w4_v2_k4_gffn_dw7",
+    "track": "Track9-v2-CIFAR100",
+    "description": "Full Subspace-CAN-v2 (ctx_bn + abs + proj_bias + dw7 + gFFN-G, 1.174M, dpr=0.20)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_gffn_dw7", "wandb.swanlab=true", "wandb.group=wave4_v2_cifar100"]
+  }
+]

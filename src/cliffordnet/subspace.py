@@ -498,9 +498,14 @@ class SubspaceGeometricProduct(nn.Module):
             groups=self.aligned_dim,
             bias=False,
         )
-        self.ctx_bn_layer: nn.Module = (
-            nn.BatchNorm2d(self.aligned_dim) if ctx_bn else nn.Identity()
-        )
+        if ctx_bn:
+            self.ctx_bn_layer: nn.Module = (
+                LayerNorm2d(self.aligned_dim)
+                if norm_mode == "ln2d"
+                else nn.BatchNorm2d(self.aligned_dim)
+            )
+        else:
+            self.ctx_bn_layer = nn.Identity()
         if use_global_context:
             # Linear-O(N) global mean-field superposition (Paper 1 Sec. 3.4 / 3.7 adapted to subspaces):
             # mixes each k-subspace of GlobalAvgPool(z2_prime) and superposes into z2 via learned beta.
@@ -1912,6 +1917,109 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
         TimmClassifierWrapper,
         {"timm_name": "convnext_femto", "drop_path_rate": 0.15},
     ),
+    "baseline_convnext_pico": (
+        TimmClassifierWrapper,
+        {"timm_name": "convnext_pico", "drop_path_rate": 0.15},
+    ),
+    "baseline_convnext_nano": (
+        TimmClassifierWrapper,
+        {"timm_name": "convnext_nano", "drop_path_rate": 0.20},
+    ),
+    # ---- CIFAR-100 v2 Backport & Dead-Zone-Fixed Controls (Wave 4 / Wave A) ----
+    "subspace_hier_k4_v2": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_244_v2": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": (2, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k6_v2": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "stage_dims": (84, 120, 144),
+            "subspace_k": 6,
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_v2_inner_wide": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "inner_wide",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_v2_sym": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "sym_full",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_v2_ln2d": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "norm_mode": "ln2d",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_v2_ctxbn_diff": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "ctx_mode": "diff",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_v2_gffn_dw7": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
     # ---- First-Principles ImageNet-1k v2 Cumulative Ablation Ladder ----
     "in1k_v2_rung1_recipe": (
         HierarchicalSubspaceCliffordNet,
@@ -1921,6 +2029,38 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "stage_depths": (2, 2, 6, 2),
             "stage_dims": (64, 128, 256, 384),
             "subspace_k": (2, 4, 4, 4),
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_ablate_abs_only": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": False,
+            "proj_bias": False,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_ablate_ctxbn_diff": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 64,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (64, 128, 256, 384),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "diff",
+            "ctx_bn": True,
+            "proj_bias": True,
             "use_global_context": True,
             "downsample_mode": "conv",
             "drop_path_rate": 0.10,
@@ -1959,6 +2099,42 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "drop_path_rate": 0.10,
         },
     ),
+    "in1k_v2_atto_ln2d": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 48,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (48, 96, 192, 440),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "ln2d",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
+    "in1k_v2_atto_inner_wide": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 48,
+            "stage_depths": (2, 2, 6, 2),
+            "stage_dims": (48, 96, 192, 440),
+            "subspace_k": (2, 4, 4, 4),
+            "cli_mode": "inner_wide",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.10,
+        },
+    ),
     "in1k_v2_atto_swiglu_k6": (
         HierarchicalSubspaceCliffordNet,
         {
@@ -1975,6 +2151,41 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "use_global_context": True,
             "downsample_mode": "conv",
             "drop_path_rate": 0.10,
+        },
+    ),
+    # ---- ImageNet-1k v2 Scaling Presets: Pico (~8.5M, 1.32G) & Nano (~14.7M, 2.39G) ----
+    "in1k_v2_pico_k4": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 76,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (76, 152, 304, 640),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.15,
+        },
+    ),
+    "in1k_v2_nano_k4": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 104,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (104, 208, 416, 832),
+            "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.20,
         },
     ),
 }

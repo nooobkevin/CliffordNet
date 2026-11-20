@@ -992,12 +992,52 @@ class CliffordNetLightning(L.LightningModule):
 
     def _gpu_preprocess_uint8(self, images: torch.Tensor, train: bool) -> torch.Tensor:
         """
-        Fast GPU-side float conversion, per-image ColorJitter(0.4, 0.4, 0.4), Normalize,
-        and RandomErasing(p=0.25) when DataLoader transfers compact uint8 tensors (4x smaller IPC/H2D).
+        Fast GPU-side float conversion, fused RandomResizedCrop+Flip+Affine (when fed 256x256
+        zero-decode RAM cache), per-image ColorJitter(0.4, 0.4, 0.4), Normalize, and
+        RandomErasing(p=0.25) when DataLoader transfers compact uint8 tensors.
         """
         if images.dtype != torch.uint8:
             return images
         x = images.to(dtype=torch.float32).mul_(1.0 / 255.0)
+        if train and x.shape[-1] > 224:
+            # Fused GPU RandomResizedCrop(224, scale=(0.08, 1.0), ratio=(3/4, 4/3)) + HFlip + mild Rotate
+            B = x.shape[0]
+            dev = x.device
+            scale = torch.empty((B,), device=dev, dtype=torch.float32).uniform_(0.08, 1.0)
+            log_r = torch.empty((B,), device=dev, dtype=torch.float32).uniform_(
+                math.log(3.0 / 4.0), math.log(4.0 / 3.0)
+            )
+            ratio = torch.exp(log_r)
+            crop_h = torch.sqrt(scale / ratio).clamp_(0.25, 1.0)
+            crop_w = torch.sqrt(scale * ratio).clamp_(0.25, 1.0)
+            tx = (torch.rand((B,), device=dev) * 2.0 - 1.0) * (1.0 - crop_w)
+            ty = (torch.rand((B,), device=dev) * 2.0 - 1.0) * (1.0 - crop_h)
+            flip = torch.where(
+                torch.rand((B,), device=dev) < 0.5,
+                torch.full((B,), -1.0, device=dev),
+                torch.ones((B,), device=dev),
+            )
+            # Mild random rotation (+-15 deg, p=0.3) fused into the same affine grid
+            do_rot = torch.rand((B,), device=dev) < 0.3
+            angle = torch.where(
+                do_rot,
+                torch.empty((B,), device=dev).uniform_(-0.2618, 0.2618),
+                torch.zeros((B,), device=dev),
+            )
+            ca = torch.cos(angle)
+            sa = torch.sin(angle)
+            sx = crop_w * flip
+            sy = crop_h
+            theta = torch.zeros((B, 2, 3), device=dev, dtype=torch.float32)
+            theta[:, 0, 0] = sx * ca
+            theta[:, 0, 1] = -sy * sa
+            theta[:, 0, 2] = tx
+            theta[:, 1, 0] = sx * sa
+            theta[:, 1, 1] = sy * ca
+            theta[:, 1, 2] = ty
+            grid = F.affine_grid(theta, (B, 3, 224, 224), align_corners=False)
+            x = F.grid_sample(x, grid, mode="bilinear", padding_mode="border", align_corners=False)
+
         if train:
             B, _, H, W = x.shape
             dev = x.device
@@ -1520,6 +1560,104 @@ class HFImageNetDataset(torch.utils.data.Dataset):
         return image, item["label"]
 
 
+class RamCacheImageNetDataset(torch.utils.data.Dataset):
+    """Zero-JPEG-decode read-only np.memmap dataset backed by /dev/shm uint8 arrays."""
+
+    def __init__(self, img_path: str, lbl_path: str):
+        self.img_path = img_path
+        self.lbl_path = lbl_path
+        self._imgs = None
+        self._lbls = None
+        lbls = np.load(lbl_path, mmap_mode="r")
+        self._len = int(lbls.shape[0])
+
+    def _ensure_open(self):
+        if self._imgs is None:
+            self._imgs = np.load(self.img_path, mmap_mode="r")
+            self._lbls = np.load(self.lbl_path, mmap_mode="r")
+
+    def __len__(self):
+        return self._len
+
+    def __getitem__(self, idx):
+        self._ensure_open()
+        # Copy single contiguous uint8 image slice into a writable tensor for pin_memory
+        img = torch.from_numpy(np.array(self._imgs[idx], copy=True))
+        lbl = int(self._lbls[idx])
+        return img, lbl
+
+
+class _GpuShardBatchLoader:
+    """
+    Zero-CPU, zero-PCIe DataLoader that keeps this rank's i.i.d. 1/world_size shard
+    of uint8 images directly in GPU HBM and yields shuffled GPU batches.
+    """
+
+    def __init__(
+        self,
+        img_path: str,
+        lbl_path: str,
+        batch_size: int,
+        shuffle: bool,
+        drop_last: bool,
+        rank: int,
+        world_size: int,
+        device: torch.device,
+        seed: int = 42,
+    ):
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.device = device
+        self.rank = rank
+        self.epoch = 0
+
+        mm_imgs = np.load(img_path, mmap_mode="r")
+        mm_lbls = np.load(lbl_path, mmap_mode="r")
+        n = int(mm_lbls.shape[0])
+        # Deterministic global permutation so every rank gets an i.i.d. stratified 1/W shard
+        if shuffle:
+            rng = np.random.default_rng(seed)
+            perm = rng.permutation(n)
+            my_idx = perm[rank::world_size]
+        else:
+            my_idx = np.arange(rank, n, world_size)
+
+        # Copy this rank's shard directly from /dev/shm RAM into GPU HBM in chunks to keep host peak low
+        shard_n = len(my_idx)
+        c, h, w = mm_imgs.shape[1:]
+        self.imgs_gpu = torch.empty((shard_n, c, h, w), dtype=torch.uint8, device=device)
+        self.lbls_gpu = torch.from_numpy(np.array(mm_lbls[my_idx], dtype=np.int64)).to(device)
+        chunk = 8192
+        for s in range(0, shard_n, chunk):
+            e = min(s + chunk, shard_n)
+            buf = np.array(mm_imgs[my_idx[s:e]], copy=True)
+            self.imgs_gpu[s:e].copy_(torch.from_numpy(buf), non_blocking=True)
+        torch.cuda.synchronize(device)
+        self.shard_n = shard_n
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return self.shard_n // self.batch_size
+        return (self.shard_n + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        self.epoch += 1
+        if self.shuffle:
+            g = torch.Generator(device=self.device)
+            g.manual_seed(100003 * self.epoch + self.rank)
+            order = torch.randperm(self.shard_n, generator=g, device=self.device)
+        else:
+            order = torch.arange(self.shard_n, device=self.device)
+
+        n_batches = len(self)
+        for bi in range(n_batches):
+            s = bi * self.batch_size
+            e = min(s + self.batch_size, self.shard_n)
+            idx = order[s:e]
+            yield self.imgs_gpu.index_select(0, idx), self.lbls_gpu.index_select(0, idx)
+
+
 class ImageNet1kDataModule(L.LightningDataModule):
     def __init__(
         self,
@@ -1532,13 +1670,64 @@ class ImageNet1kDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.prepare_data_per_node = True
+        self._vram_train_loader = None
+        self._vram_val_loader = None
+
+    def _has_ram_cache(self) -> bool:
+        return (
+            os.path.exists(os.path.join(self.nfs_data_dir, "train.done"))
+            and os.path.exists(os.path.join(self.nfs_data_dir, "val.done"))
+        )
+
+    def _use_vram_cache(self) -> bool:
+        return self._has_ram_cache() and os.environ.get("CLIFFORDNET_VRAM_CACHE", "0") == "1"
 
     def prepare_data(self):
         """Ensure the Hugging Face dataset cache exists on shared storage."""
+        if self._has_ram_cache():
+            return
         load_dataset("ILSVRC/imagenet-1k", cache_dir=self.nfs_data_dir)
 
     def setup(self, stage=None):
         """Load datasets on every rank after Lightning's prepare_data barrier."""
+        if self._use_vram_cache():
+            if self._vram_train_loader is None:
+                rank = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")))
+                local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+                world_size = int(os.environ.get("WORLD_SIZE", "1"))
+                device = torch.device(f"cuda:{local_rank}")
+                self._vram_train_loader = _GpuShardBatchLoader(
+                    os.path.join(self.nfs_data_dir, "train_images.npy"),
+                    os.path.join(self.nfs_data_dir, "train_labels.npy"),
+                    batch_size=self.batch_size,
+                    shuffle=True,
+                    drop_last=True,
+                    rank=rank,
+                    world_size=world_size,
+                    device=device,
+                )
+                self._vram_val_loader = _GpuShardBatchLoader(
+                    os.path.join(self.nfs_data_dir, "val_images.npy"),
+                    os.path.join(self.nfs_data_dir, "val_labels.npy"),
+                    batch_size=self.batch_size,
+                    shuffle=False,
+                    drop_last=False,
+                    rank=rank,
+                    world_size=world_size,
+                    device=device,
+                )
+            return
+
+        if self._has_ram_cache():
+            self.train_ds = RamCacheImageNetDataset(
+                os.path.join(self.nfs_data_dir, "train_images.npy"),
+                os.path.join(self.nfs_data_dir, "train_labels.npy"),
+            )
+            self.val_ds = RamCacheImageNetDataset(
+                os.path.join(self.nfs_data_dir, "val_images.npy"),
+                os.path.join(self.nfs_data_dir, "val_labels.npy"),
+            )
+            return
 
         train_tf = transforms.Compose(
             [
@@ -1561,6 +1750,8 @@ class ImageNet1kDataModule(L.LightningDataModule):
         self.val_ds = HFImageNetDataset(ds["validation"], transform=val_tf)
 
     def train_dataloader(self):
+        if self._vram_train_loader is not None:
+            return self._vram_train_loader
         return DataLoader(
             self.train_ds,
             batch_size=self.batch_size,
@@ -1573,6 +1764,8 @@ class ImageNet1kDataModule(L.LightningDataModule):
         )
 
     def val_dataloader(self):
+        if self._vram_val_loader is not None:
+            return self._vram_val_loader
         return DataLoader(
             self.val_ds,
             batch_size=self.batch_size,

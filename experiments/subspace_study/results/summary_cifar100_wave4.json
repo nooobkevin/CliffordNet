@@ -1,0 +1,156 @@
+[
+  {
+    "name": "w4_v2_k4_dpr020",
+    "description": "Subspace-CAN-v2 k=4 (ctx_bn + abs + proj_bias, dpr=0.20, 1.128M) vs Wave 3 v1 anchor (78.71%)",
+    "track": "Track9-v2-CIFAR100",
+    "gpu_id": 0,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2082.07,
+    "wall_time_min": 34.7,
+    "best_val_acc1_pct": 79.21,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_dpr020/stdout.log"
+  },
+  {
+    "name": "w4_v2_244_allwd",
+    "description": "Subspace-CAN-v2 Hybrid (2,4,4) + CAN all-wd (1.100M) vs Wave 3 (79.72%) & Paper (80.25%)",
+    "track": "Track9-v2-CIFAR100",
+    "gpu_id": 1,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2082.88,
+    "wall_time_min": 34.71,
+    "best_val_acc1_pct": 79.58,
+    "overrides": [
+      "model.size=subspace_hier_244_v2",
+      "optim.decay_norm_and_bias=true",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_244_v2",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_244_allwd/stdout.log"
+  },
+  {
+    "name": "w4_v2_k6_dpr020",
+    "description": "Subspace-CAN-v2 iso-param k=6 (15 bivectors, 1.121M, dpr=0.20) vs Wave 3 v1 k=6 (79.05%)",
+    "track": "Track9-v2-CIFAR100",
+    "gpu_id": 2,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2595.32,
+    "wall_time_min": 43.26,
+    "best_val_acc1_pct": 79.24,
+    "overrides": [
+      "model.size=subspace_hier_k6_v2",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k6_v2",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k6_dpr020/stdout.log"
+  },
+  {
+    "name": "w4_v2_k4_inner_wide",
+    "description": "Dead-zone-fixed iso-param Inner-wide control (1.138M, dpr=0.20) testing wedge value after fix",
+    "track": "Track9-v2-Deconfound",
+    "gpu_id": 3,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 1908.49,
+    "wall_time_min": 31.81,
+    "best_val_acc1_pct": 79.55,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2_inner_wide",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2_inner_wide",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_inner_wide/stdout.log"
+  },
+  {
+    "name": "w4_v2_k4_sym",
+    "description": "Dead-zone-fixed iso-param Symmetric off-diag control (1.128M, dpr=0.20)",
+    "track": "Track9-v2-Deconfound",
+    "gpu_id": 4,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2211.33,
+    "wall_time_min": 36.86,
+    "best_val_acc1_pct": 78.85,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2_sym",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2_sym",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_sym/stdout.log"
+  },
+  {
+    "name": "w4_v2_k4_ln2d",
+    "description": "100% LayerNorm2d + v2 dead-zone fix (ctx_ln2d + abs + proj_bias, 1.128M, dpr=0.20)",
+    "track": "Track9-v2-NormInvariance",
+    "gpu_id": 5,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 3909.15,
+    "wall_time_min": 65.15,
+    "best_val_acc1_pct": 79.46,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2_ln2d",
+      "model.compile=false",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2_ln2d",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_ln2d/stdout.log"
+  },
+  {
+    "name": "w4_v2_k4_ctxbn_diff",
+    "description": "Isolates ctx_bn + diff (balanced discrete gradient z2-z1, 1.128M) vs ctx_bn + abs",
+    "track": "Track9-v2-Mechanism",
+    "gpu_id": 6,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 2088.46,
+    "wall_time_min": 34.81,
+    "best_val_acc1_pct": 79.12,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2_ctxbn_diff",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2_ctxbn_diff",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_ctxbn_diff/stdout.log"
+  },
+  {
+    "name": "w4_v2_k4_gffn_dw7",
+    "description": "Full Subspace-CAN-v2 (ctx_bn + abs + proj_bias + dw7 + gFFN-G, 1.174M, dpr=0.20)",
+    "track": "Track9-v2-CIFAR100",
+    "gpu_id": 7,
+    "returncode": 0,
+    "status": "ok",
+    "wall_time_sec": 3469.08,
+    "wall_time_min": 57.82,
+    "best_val_acc1_pct": 79.04,
+    "overrides": [
+      "model.size=subspace_hier_k4_v2_gffn_dw7",
+      "wandb.swanlab=true",
+      "wandb.group=wave4_v2_cifar100",
+      "data.data_dir=./data/cifar100"
+    ],
+    "model_size": "subspace_hier_k4_v2_gffn_dw7",
+    "log_path": "./outputs/cifar100_wave4/w4_v2_k4_gffn_dw7/stdout.log"
+  }
+]

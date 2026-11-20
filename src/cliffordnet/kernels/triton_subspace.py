@@ -240,11 +240,11 @@ def _subspace_gp_fwd_nchw_kernel(
     EVEN_HW: tl.constexpr,
     USE_INT64: tl.constexpr,
 ):
-    pid_hw = tl.program_id(0)
-    pid_bg = tl.program_id(1)
+    pid_bg = tl.program_id(0)
+    pid_hw = tl.program_id(1)
     if USE_INT64:
-        pid_hw = pid_hw.to(tl.int64)
         pid_bg = pid_bg.to(tl.int64)
+        pid_hw = pid_hw.to(tl.int64)
 
     if BLOCK_BG == 1:
         bg = pid_bg
@@ -628,8 +628,8 @@ def _subspace_gp_fwd_strided_kernel(
     D_K: tl.constexpr,
     BLOCK_HW: tl.constexpr,
 ):
-    pid_hw = tl.program_id(0).to(tl.int64)
-    bg = tl.program_id(1).to(tl.int64)
+    bg = tl.program_id(0).to(tl.int64)
+    pid_hw = tl.program_id(1).to(tl.int64)
     b = bg // G
     g = bg % G
 
@@ -872,11 +872,11 @@ def _subspace_gp_bwd_nchw_kernel(
     EVEN_HW: tl.constexpr,
     USE_INT64: tl.constexpr,
 ):
-    pid_hw = tl.program_id(0)
-    pid_bg = tl.program_id(1)
+    pid_bg = tl.program_id(0)
+    pid_hw = tl.program_id(1)
     if USE_INT64:
-        pid_hw = pid_hw.to(tl.int64)
         pid_bg = pid_bg.to(tl.int64)
+        pid_hw = pid_hw.to(tl.int64)
 
     if BLOCK_BG == 1:
         bg = pid_bg
@@ -1457,8 +1457,8 @@ def _subspace_gp_bwd_strided_kernel(
     NEED_DZ2: tl.constexpr,
     BLOCK_HW: tl.constexpr,
 ):
-    pid_hw = tl.program_id(0).to(tl.int64)
-    bg = tl.program_id(1).to(tl.int64)
+    bg = tl.program_id(0).to(tl.int64)
+    pid_hw = tl.program_id(1).to(tl.int64)
     b = bg // G
     g = bg % G
 
@@ -1687,7 +1687,7 @@ def _launch_fwd(
     if mem_fmt == torch.contiguous_format and _is_dense_nchw(z1) and _is_dense_nchw(z2):
         block_bg, block_hw, num_warps = _select_nchw_tiling(hw)
         even_hw = (block_bg == 1) and ((hw % block_hw) == 0)
-        grid = (triton.cdiv(hw, block_hw), triton.cdiv(n_bg, block_bg))
+        grid = (triton.cdiv(n_bg, block_bg), triton.cdiv(hw, block_hw))
         _subspace_gp_fwd_nchw_kernel[grid](
             z1,
             z2,
@@ -1708,7 +1708,7 @@ def _launch_fwd(
         return out
 
     block_hw = 256 if hw >= 128 else max(32, triton.next_power_of_2(hw))
-    grid = (triton.cdiv(hw, block_hw), n_bg)
+    grid = (n_bg, triton.cdiv(hw, block_hw))
     _subspace_gp_fwd_strided_kernel[grid](
         z1,
         z2,
@@ -1812,7 +1812,7 @@ def _launch_bwd(
     if all_nchw:
         block_bg, block_hw, num_warps = _select_nchw_tiling(hw)
         even_hw = (block_bg == 1) and ((hw % block_hw) == 0)
-        grid = (triton.cdiv(hw, block_hw), triton.cdiv(n_bg, block_bg))
+        grid = (triton.cdiv(n_bg, block_bg), triton.cdiv(hw, block_hw))
         _subspace_gp_bwd_nchw_kernel[grid](
             grad_out,
             z1,
@@ -1840,7 +1840,7 @@ def _launch_bwd(
     dz1_strides = dz1.stride() if need_dz1 else (0, 0, 0, 0)
     dz2_strides = dz2.stride() if need_dz2 else (0, 0, 0, 0)
     block_hw = 256 if hw >= 128 else max(32, triton.next_power_of_2(hw))
-    grid = (triton.cdiv(hw, block_hw), n_bg)
+    grid = (n_bg, triton.cdiv(hw, block_hw))
     _subspace_gp_bwd_strided_kernel[grid](
         grad_out,
         z1,

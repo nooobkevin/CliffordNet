@@ -1,0 +1,182 @@
+[
+  {
+    "run": "in1k_v2_ablate_abs_only_25ep",
+    "label": "Wave B1: abs-only (no ctx_bn, no proj_bias)",
+    "model_size": "in1k_v2_ablate_abs_only",
+    "gmacs": 0.737,
+    "gpus": "0,1",
+    "epochs": 25,
+    "status": "ok",
+    "wall_time_min": 0.0,
+    "best_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_ablate_abs_only_25ep/checkpoints/epoch=24-val/acc1=0.6650.ckpt",
+    "last_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_ablate_abs_only_25ep/checkpoints/last.ckpt",
+    "eval": {
+      "params_m": 3.944,
+      "clean_top1": 66.45,
+      "clean_top5": 87.22,
+      "corruptions": {
+        "contrast_0.12": 47.59,
+        "contrast_0.25": 60.67,
+        "contrast_2.0": 62.33,
+        "brightness_+0.30": 64.65,
+        "brightness_-0.30": 58.84,
+        "gamma_2.2": 61.71,
+        "fog_veil": 63.81,
+        "gaussian_noise_0.08": 52.08,
+        "highpass_edges": 10.01,
+        "lowpass_blur": 54.74,
+        "fft_phase_only": 28.77
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.78458,
+        "cancel/rel_diff_lt1e-2": 0.00386,
+        "cancel/rel_diff_lt1e-4": 0.00055,
+        "magnitude/wedge_abs_mean": 1.20263,
+        "magnitude/wedge_abs_max": 83.58854,
+        "magnitude/dot_abs_mean": 0.42299,
+        "magnitude/wedge_to_dot_ratio": 2.84269,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.11167,
+        "ortho/subspace_cos_sim_mean": 0.46346,
+        "invariance/lambda_wedge_rel_err": 2.93893,
+        "spectrum/effective_rank": 0.70065
+      }
+    }
+  },
+  {
+    "run": "in1k_v2_ablate_ctxbn_diff_25ep",
+    "label": "Wave B2: ctx_bn + diff + proj_bias (balanced discrete grad)",
+    "model_size": "in1k_v2_ablate_ctxbn_diff",
+    "gmacs": 0.737,
+    "gpus": "2,3",
+    "epochs": 25,
+    "status": "ok",
+    "wall_time_min": 0.0,
+    "best_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_ablate_ctxbn_diff_25ep/checkpoints/epoch=24-val/acc1=0.6611.ckpt",
+    "last_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_ablate_ctxbn_diff_25ep/checkpoints/last.ckpt",
+    "eval": {
+      "params_m": 3.957,
+      "clean_top1": 66.03,
+      "clean_top5": 86.92,
+      "corruptions": {
+        "contrast_0.12": 46.29,
+        "contrast_0.25": 60.08,
+        "contrast_2.0": 62.19,
+        "brightness_+0.30": 64.1,
+        "brightness_-0.30": 58.77,
+        "gamma_2.2": 61.58,
+        "fog_veil": 62.94,
+        "gaussian_noise_0.08": 50.41,
+        "highpass_edges": 10.64,
+        "lowpass_blur": 54.14,
+        "fft_phase_only": 29.8
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.584,
+        "cancel/rel_diff_lt1e-2": 0.01157,
+        "cancel/rel_diff_lt1e-4": 0.00165,
+        "magnitude/wedge_abs_mean": 1.80018,
+        "magnitude/wedge_abs_max": 153.14062,
+        "magnitude/dot_abs_mean": 0.18266,
+        "magnitude/wedge_to_dot_ratio": 11.36969,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.10835,
+        "ortho/subspace_cos_sim_mean": 0.79396,
+        "invariance/lambda_wedge_rel_err": 3.32687,
+        "spectrum/effective_rank": 0.67692
+      }
+    }
+  },
+  {
+    "run": "in1k_v2_atto_ln2d_25ep",
+    "label": "Wave B3: Subspace-CAN-v2-Atto 100% LayerNorm2d (0.491G)",
+    "model_size": "in1k_v2_atto_ln2d",
+    "gmacs": 0.491,
+    "gpus": "4,5",
+    "epochs": 25,
+    "status": "ok",
+    "wall_time_min": 0.0,
+    "best_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_atto_ln2d_25ep/checkpoints/epoch=24-val/acc1=0.6639.ckpt",
+    "last_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_atto_ln2d_25ep/checkpoints/last.ckpt",
+    "eval": {
+      "params_m": 3.573,
+      "clean_top1": 66.18,
+      "clean_top5": 87.04,
+      "corruptions": {
+        "contrast_0.12": 48.45,
+        "contrast_0.25": 60.88,
+        "contrast_2.0": 62.25,
+        "brightness_+0.30": 64.48,
+        "brightness_-0.30": 58.98,
+        "gamma_2.2": 61.94,
+        "fog_veil": 64.19,
+        "gaussian_noise_0.08": 51.24,
+        "highpass_edges": 10.68,
+        "lowpass_blur": 54.29,
+        "fft_phase_only": 30.25
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.78266,
+        "cancel/rel_diff_lt1e-2": 0.00391,
+        "cancel/rel_diff_lt1e-4": 0.00056,
+        "magnitude/wedge_abs_mean": 0.9338,
+        "magnitude/wedge_abs_max": 40.12891,
+        "magnitude/dot_abs_mean": 0.32657,
+        "magnitude/wedge_to_dot_ratio": 2.91088,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.12231,
+        "ortho/subspace_cos_sim_mean": 0.46317,
+        "invariance/lambda_wedge_rel_err": 2.24656,
+        "spectrum/effective_rank": 0.72794
+      }
+    }
+  },
+  {
+    "run": "in1k_v2_atto_inner_wide_25ep",
+    "label": "Wave B4: Subspace-CAN-v2-Atto Inner-wide control (0.493G)",
+    "model_size": "in1k_v2_atto_inner_wide",
+    "gmacs": 0.493,
+    "gpus": "6,7",
+    "epochs": 25,
+    "status": "ok",
+    "wall_time_min": 0.0,
+    "best_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_atto_inner_wide_25ep/checkpoints/epoch=24-val/acc1=0.6545.ckpt",
+    "last_ckpt": "./outputs/in1k_waveB_v2_mech/in1k_v2_atto_inner_wide_25ep/checkpoints/last.ckpt",
+    "eval": {
+      "params_m": 3.594,
+      "clean_top1": 65.3,
+      "clean_top5": 86.74,
+      "corruptions": {
+        "contrast_0.12": 46.52,
+        "contrast_0.25": 59.45,
+        "contrast_2.0": 61.34,
+        "brightness_+0.30": 63.24,
+        "brightness_-0.30": 57.62,
+        "gamma_2.2": 60.48,
+        "fog_veil": 62.52,
+        "gaussian_noise_0.08": 49.51,
+        "highpass_edges": 8.46,
+        "lowpass_blur": 53.27,
+        "fft_phase_only": 27.81
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.0,
+        "cancel/rel_diff_lt1e-2": 0.0,
+        "cancel/rel_diff_lt1e-4": 0.0,
+        "magnitude/wedge_abs_mean": 0.0,
+        "magnitude/wedge_abs_max": 0.0,
+        "magnitude/dot_abs_mean": 0.74433,
+        "magnitude/wedge_to_dot_ratio": 0.0,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.17317,
+        "ortho/subspace_cos_sim_mean": 0.47778,
+        "invariance/lambda_wedge_rel_err": 4.24252,
+        "spectrum/effective_rank": 0.70804
+      }
+    }
+  }
+]
