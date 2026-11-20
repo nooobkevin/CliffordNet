@@ -990,51 +990,61 @@ class CliffordNetLightning(L.LightningModule):
     def on_train_batch_start(self, batch, batch_idx):
         self._train_step_start = _time.monotonic()
 
-    def _gpu_preprocess_uint8(self, images: torch.Tensor, train: bool) -> torch.Tensor:
+    def _gpu_preprocess_uint8(
+        self,
+        images: torch.Tensor,
+        train: bool,
+        shapes: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
-        Fast GPU-side float conversion, fused RandomResizedCrop+Flip+Affine (when fed 256x256
-        zero-decode RAM cache), per-image ColorJitter(0.4, 0.4, 0.4), Normalize, and
-        RandomErasing(p=0.25) when DataLoader transfers compact uint8 tensors.
+        Fast GPU-side float conversion, aspect-ratio-preserving fused RandomResizedCrop+Flip+Affine
+        (when fed padded /dev/shm RAM cache with per-image valid (h, w) shapes), per-image
+        ColorJitter(0.4, 0.4, 0.4), Normalize, and RandomErasing(p=0.25).
         """
         if images.dtype != torch.uint8:
             return images
         x = images.to(dtype=torch.float32).mul_(1.0 / 255.0)
         if train and x.shape[-1] > 224:
-            # Fused GPU RandomResizedCrop(224, scale=(0.08, 1.0), ratio=(3/4, 4/3)) + HFlip + mild Rotate
-            B = x.shape[0]
+            # Aspect-ratio-preserving GPU RandomResizedCrop(224, scale=(0.08, 1.0), ratio=(3/4, 4/3)) + HFlip
+            B, _, H_canv, W_canv = x.shape
             dev = x.device
+            if shapes is not None:
+                valid_h = (shapes[:, 0].to(device=dev, dtype=torch.float32) / float(H_canv)).clamp_(0.1, 1.0)
+                valid_w = (shapes[:, 1].to(device=dev, dtype=torch.float32) / float(W_canv)).clamp_(0.1, 1.0)
+            else:
+                valid_h = torch.ones((B,), device=dev, dtype=torch.float32)
+                valid_w = torch.ones((B,), device=dev, dtype=torch.float32)
+
+            valid_area = valid_h * valid_w
             scale = torch.empty((B,), device=dev, dtype=torch.float32).uniform_(0.08, 1.0)
             log_r = torch.empty((B,), device=dev, dtype=torch.float32).uniform_(
                 math.log(3.0 / 4.0), math.log(4.0 / 3.0)
             )
             ratio = torch.exp(log_r)
-            crop_h = torch.sqrt(scale / ratio).clamp_(0.25, 1.0)
-            crop_w = torch.sqrt(scale * ratio).clamp_(0.25, 1.0)
-            tx = (torch.rand((B,), device=dev) * 2.0 - 1.0) * (1.0 - crop_w)
-            ty = (torch.rand((B,), device=dev) * 2.0 - 1.0) * (1.0 - crop_h)
+            target_area = scale * valid_area
+            crop_h = torch.sqrt(target_area / ratio).clamp(min=0.15)
+            crop_w = torch.sqrt(target_area * ratio).clamp(min=0.15)
+            # Clamp strictly inside each image's true non-padded valid box [0, valid_h] x [0, valid_w]
+            over = torch.maximum(crop_h / valid_h, crop_w / valid_w).clamp(min=1.0)
+            crop_h = crop_h / over
+            crop_w = crop_w / over
+
+            # Sample top-left in [0, valid - crop], then map to [-1, 1] grid_sample coordinates
+            top = torch.rand((B,), device=dev) * (valid_h - crop_h)
+            left = torch.rand((B,), device=dev) * (valid_w - crop_w)
+            cx = -1.0 + 2.0 * (left + 0.5 * crop_w)
+            cy = -1.0 + 2.0 * (top + 0.5 * crop_h)
+
             flip = torch.where(
                 torch.rand((B,), device=dev) < 0.5,
                 torch.full((B,), -1.0, device=dev),
                 torch.ones((B,), device=dev),
             )
-            # Mild random rotation (+-15 deg, p=0.3) fused into the same affine grid
-            do_rot = torch.rand((B,), device=dev) < 0.3
-            angle = torch.where(
-                do_rot,
-                torch.empty((B,), device=dev).uniform_(-0.2618, 0.2618),
-                torch.zeros((B,), device=dev),
-            )
-            ca = torch.cos(angle)
-            sa = torch.sin(angle)
-            sx = crop_w * flip
-            sy = crop_h
             theta = torch.zeros((B, 2, 3), device=dev, dtype=torch.float32)
-            theta[:, 0, 0] = sx * ca
-            theta[:, 0, 1] = -sy * sa
-            theta[:, 0, 2] = tx
-            theta[:, 1, 0] = sx * sa
-            theta[:, 1, 1] = sy * ca
-            theta[:, 1, 2] = ty
+            theta[:, 0, 0] = crop_w * flip
+            theta[:, 0, 2] = cx
+            theta[:, 1, 1] = crop_h
+            theta[:, 1, 2] = cy
             grid = F.affine_grid(theta, (B, 3, 224, 224), align_corners=False)
             x = F.grid_sample(x, grid, mode="bilinear", padding_mode="border", align_corners=False)
 
@@ -1081,8 +1091,12 @@ class CliffordNetLightning(L.LightningModule):
         return x
 
     def training_step(self, batch, batch_idx):
-        images, labels = batch
-        images = self._gpu_preprocess_uint8(images, train=True)
+        if len(batch) == 3:
+            images, labels, shapes = batch
+        else:
+            images, labels = batch
+            shapes = None
+        images = self._gpu_preprocess_uint8(images, train=True, shapes=shapes)
         if self.mixup_fn is not None:
             images, labels = self.mixup_fn(images, labels)
             hard_labels = labels.argmax(dim=1)
@@ -1292,7 +1306,10 @@ class CliffordNetLightning(L.LightningModule):
             )
 
     def validation_step(self, batch, batch_idx):
-        images, labels = batch
+        if len(batch) == 3:
+            images, labels, _ = batch
+        else:
+            images, labels = batch
         images = self._gpu_preprocess_uint8(images, train=False)
         x_cl = images.contiguous(memory_format=torch.channels_last)
         outputs = self._validation_model()(x_cl)
@@ -1563,11 +1580,13 @@ class HFImageNetDataset(torch.utils.data.Dataset):
 class RamCacheImageNetDataset(torch.utils.data.Dataset):
     """Zero-JPEG-decode read-only np.memmap dataset backed by /dev/shm uint8 arrays."""
 
-    def __init__(self, img_path: str, lbl_path: str):
+    def __init__(self, img_path: str, lbl_path: str, shp_path: str | None = None):
         self.img_path = img_path
         self.lbl_path = lbl_path
+        self.shp_path = shp_path if (shp_path and os.path.exists(shp_path)) else None
         self._imgs = None
         self._lbls = None
+        self._shps = None
         lbls = np.load(lbl_path, mmap_mode="r")
         self._len = int(lbls.shape[0])
 
@@ -1575,15 +1594,19 @@ class RamCacheImageNetDataset(torch.utils.data.Dataset):
         if self._imgs is None:
             self._imgs = np.load(self.img_path, mmap_mode="r")
             self._lbls = np.load(self.lbl_path, mmap_mode="r")
+            if self.shp_path is not None:
+                self._shps = np.load(self.shp_path, mmap_mode="r")
 
     def __len__(self):
         return self._len
 
     def __getitem__(self, idx):
         self._ensure_open()
-        # Copy single contiguous uint8 image slice into a writable tensor for pin_memory
         img = torch.from_numpy(np.array(self._imgs[idx], copy=True))
         lbl = int(self._lbls[idx])
+        if self._shps is not None:
+            shp = torch.from_numpy(np.array(self._shps[idx], dtype=np.int16, copy=True))
+            return img, lbl, shp
         return img, lbl
 
 
@@ -1722,6 +1745,7 @@ class ImageNet1kDataModule(L.LightningDataModule):
             self.train_ds = RamCacheImageNetDataset(
                 os.path.join(self.nfs_data_dir, "train_images.npy"),
                 os.path.join(self.nfs_data_dir, "train_labels.npy"),
+                os.path.join(self.nfs_data_dir, "train_shapes.npy"),
             )
             self.val_ds = RamCacheImageNetDataset(
                 os.path.join(self.nfs_data_dir, "val_images.npy"),

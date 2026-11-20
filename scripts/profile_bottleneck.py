@@ -35,6 +35,9 @@ def main() -> None:
     model = SUBSPACE_MODEL_BUILDERS[args.model](num_classes=1000).to(
         device=device, memory_format=torch.channels_last
     )
+    for p in model.parameters():
+        if p.ndim == 4 and p.shape[2:] == (1, 1):
+            p.data = p.data.contiguous()
     if args.compile:
         model = torch.compile(model)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, fused=True)

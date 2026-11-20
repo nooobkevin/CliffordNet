@@ -30,21 +30,34 @@ _G_SPLIT: str = ""
 _G_IMG_PATH: str = ""
 _G_LBL_PATH: str = ""
 _G_IS_TRAIN: bool = True
+_G_CANVAS: int = 320
 _G_DS = None
 _G_IMGS = None
 _G_LBLS = None
+_G_SHAPES = None
 
 
-def _init_worker(data_dir: str, split: str, img_path: str, lbl_path: str, is_train: bool) -> None:
-    global _G_DATA_DIR, _G_SPLIT, _G_IMG_PATH, _G_LBL_PATH, _G_IS_TRAIN, _G_DS, _G_IMGS, _G_LBLS
+def _init_worker(
+    data_dir: str,
+    split: str,
+    img_path: str,
+    lbl_path: str,
+    shp_path: str,
+    is_train: bool,
+    canvas: int,
+) -> None:
+    global _G_DATA_DIR, _G_SPLIT, _G_IMG_PATH, _G_LBL_PATH, _G_IS_TRAIN, _G_CANVAS
+    global _G_DS, _G_IMGS, _G_LBLS, _G_SHAPES
     _G_DATA_DIR = data_dir
     _G_SPLIT = split
     _G_IMG_PATH = img_path
     _G_LBL_PATH = lbl_path
     _G_IS_TRAIN = is_train
+    _G_CANVAS = canvas
     _G_DS = load_dataset("ILSVRC/imagenet-1k", split=split, cache_dir=data_dir)
     _G_IMGS = np.load(img_path, mmap_mode="r+")
     _G_LBLS = np.load(lbl_path, mmap_mode="r+")
+    _G_SHAPES = np.load(shp_path, mmap_mode="r+") if shp_path else None
 
 
 def _process_chunk(bounds: tuple[int, int]) -> int:
@@ -52,31 +65,42 @@ def _process_chunk(bounds: tuple[int, int]) -> int:
     ds = _G_DS
     imgs_mm = _G_IMGS
     lbls_mm = _G_LBLS
+    shps_mm = _G_SHAPES
     is_train = _G_IS_TRAIN
+    canvas = _G_CANVAS
 
     for i in range(start, end):
         item = ds[i]
         im = item["image"]
         if im.mode != "RGB":
             im = im.convert("RGB")
+        w, h = im.size
         if is_train:
-            im = im.resize((256, 256), Image.Resampling.BILINEAR)
+            # Aspect-ratio-preserving resize so max(h, w) == canvas, placed at top-left (0, 0)
+            scale = canvas / float(max(w, h))
+            nw = max(1, min(canvas, int(round(w * scale))))
+            nh = max(1, min(canvas, int(round(h * scale))))
+            im = im.resize((nw, nh), Image.Resampling.BILINEAR)
+            arr = np.asarray(im, dtype=np.uint8)
+            imgs_mm[i, :, :nh, :nw] = np.transpose(arr, (2, 0, 1))
+            if shps_mm is not None:
+                shps_mm[i, 0] = nh
+                shps_mm[i, 1] = nw
         else:
-            # Exact torchvision Resize(256) + CenterCrop(224)
-            w, h = im.size
+            # Exact torchvision Resize(256, BICUBIC) + CenterCrop(224)
             if w < h:
                 nw = 256
                 nh = int(round(h * 256.0 / w))
             else:
                 nh = 256
                 nw = int(round(w * 256.0 / h))
-            im = im.resize((nw, nh), Image.Resampling.BILINEAR)
+            im = im.resize((nw, nh), Image.Resampling.BICUBIC)
             left = (nw - 224) // 2
             top = (nh - 224) // 2
             im = im.crop((left, top, left + 224, top + 224))
+            arr = np.asarray(im, dtype=np.uint8)
+            imgs_mm[i] = np.transpose(arr, (2, 0, 1))
 
-        arr = np.asarray(im, dtype=np.uint8)
-        imgs_mm[i] = np.transpose(arr, (2, 0, 1))
         lbls_mm[i] = int(item["label"])
     return end - start
 
@@ -96,6 +120,7 @@ def _build_split(
 
     img_path = out_dir / f"{prefix}_images.npy"
     lbl_path = out_dir / f"{prefix}_labels.npy"
+    shp_path = out_dir / f"{prefix}_shapes.npy" if is_train else None
     done_path = out_dir / f"{prefix}.done"
 
     if done_path.exists() and img_path.exists() and lbl_path.exists():
@@ -112,6 +137,9 @@ def _build_split(
     mm_img = np.lib.format.open_memmap(str(img_path), mode="w+", dtype=np.uint8, shape=(n, 3, size, size))
     mm_lbl = np.lib.format.open_memmap(str(lbl_path), mode="w+", dtype=np.int64, shape=(n,))
     del mm_img, mm_lbl
+    if shp_path is not None:
+        mm_shp = np.lib.format.open_memmap(str(shp_path), mode="w+", dtype=np.int16, shape=(n, 2))
+        del mm_shp
 
     chunk_size = 2048
     chunks = [(s, min(s + chunk_size, n)) for s in range(0, n, chunk_size)]
@@ -119,7 +147,7 @@ def _build_split(
     with Pool(
         processes=num_workers,
         initializer=_init_worker,
-        initargs=(data_dir, split, str(img_path), str(lbl_path), is_train),
+        initargs=(data_dir, split, str(img_path), str(lbl_path), str(shp_path or ""), is_train, size),
     ) as pool:
         for cnt in pool.imap_unordered(_process_chunk, chunks):
             done += cnt
@@ -131,21 +159,22 @@ def _build_split(
                     flush=True,
                 )
 
-    done_path.write_text(f"ok {n}\n", encoding="utf-8")
+    done_path.write_text(f"ok {n} canvas={size}\n", encoding="utf-8")
     print(f"[cache] DONE {prefix} in {time.monotonic() - t0:.1f}s!", flush=True)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build /dev/shm zero-decode ImageNet-1k uint8 RAM cache")
+    parser = argparse.ArgumentParser(description="Build /dev/shm aspect-ratio-preserving ImageNet-1k uint8 RAM cache")
     parser.add_argument("--data-dir", type=str, default="./imagenet1k")
-    parser.add_argument("--out-dir", type=str, default="/dev/shm/in1k_raw_cache")
-    parser.add_argument("--workers", type=int, default=96)
+    parser.add_argument("--out-dir", type=str, default="/dev/shm/in1k_raw_cache_ar320")
+    parser.add_argument("--canvas", type=int, default=320)
+    parser.add_argument("--workers", type=int, default=128)
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     _build_split(args.data_dir, out_dir, "validation", "val", 224, is_train=False, num_workers=min(64, args.workers))
-    _build_split(args.data_dir, out_dir, "train", "train", 256, is_train=True, num_workers=args.workers)
+    _build_split(args.data_dir, out_dir, "train", "train", args.canvas, is_train=True, num_workers=args.workers)
 
 
 if __name__ == "__main__":

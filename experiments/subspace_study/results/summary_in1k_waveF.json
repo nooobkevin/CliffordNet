@@ -1,0 +1,86 @@
+{
+  "in1k_v2_pico_rmsnorm2d_fast_lr4e3_90ep": {
+    "stability": {
+      "val_ep": 90,
+      "val_NaN": 0,
+      "val_crash": 0,
+      "train_spikes": 0,
+      "max_wedge": 64.37
+    },
+    "eval": {
+      "params_m": 8.486,
+      "clean_top1": 75.43,
+      "clean_top5": 92.96,
+      "corruptions": {
+        "contrast_0.12": 65.48,
+        "contrast_0.25": 72.34,
+        "contrast_2.0": 71.68,
+        "brightness_+0.30": 73.85,
+        "brightness_-0.30": 70.01,
+        "gamma_2.2": 71.78,
+        "fog_veil": 73.68,
+        "gaussian_noise_0.08": 61.66,
+        "highpass_edges": 14.08,
+        "lowpass_blur": 67.7,
+        "fft_phase_only": 43.52
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.78128,
+        "cancel/rel_diff_lt1e-2": 0.00401,
+        "cancel/rel_diff_lt1e-4": 0.00057,
+        "magnitude/wedge_abs_mean": 0.7357,
+        "magnitude/wedge_abs_max": 47.55357,
+        "magnitude/dot_abs_mean": 0.26917,
+        "magnitude/wedge_to_dot_ratio": 2.83219,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.11692,
+        "ortho/subspace_cos_sim_mean": 0.4631,
+        "invariance/lambda_wedge_rel_err": 1.51328,
+        "spectrum/effective_rank": 0.69904
+      }
+    }
+  },
+  "in1k_v2_pico_rmsnorm2d_sphere_fast_lr4e3_90ep": {
+    "stability": {
+      "val_ep": 90,
+      "val_NaN": 0,
+      "val_crash": 1,
+      "train_spikes": 0,
+      "max_wedge": 24.35
+    },
+    "eval": {
+      "params_m": 8.486,
+      "clean_top1": 74.58,
+      "clean_top5": 92.2,
+      "corruptions": {
+        "contrast_0.12": 61.69,
+        "contrast_0.25": 71.1,
+        "contrast_2.0": 70.45,
+        "brightness_+0.30": 72.75,
+        "brightness_-0.30": 68.68,
+        "gamma_2.2": 70.71,
+        "fog_veil": 72.53,
+        "gaussian_noise_0.08": 59.86,
+        "highpass_edges": 10.56,
+        "lowpass_blur": 67.31,
+        "fft_phase_only": 40.17
+      },
+      "diagnostics": {
+        "cancel/rel_diff_mean": 0.77438,
+        "cancel/rel_diff_lt1e-2": 0.00415,
+        "cancel/rel_diff_lt1e-4": 0.00059,
+        "magnitude/wedge_abs_mean": 0.77191,
+        "magnitude/wedge_abs_max": 18.65848,
+        "magnitude/dot_abs_mean": 0.28871,
+        "magnitude/wedge_to_dot_ratio": 2.84404,
+        "health/nan_count": 0.0,
+        "health/inf_count": 0.0,
+        "ortho/cos_sim_mean": 0.11047,
+        "ortho/subspace_cos_sim_mean": 0.47603,
+        "invariance/lambda_wedge_rel_err": 1.18094,
+        "spectrum/effective_rank": 0.69846
+      }
+    }
+  }
+}

@@ -27,7 +27,7 @@ VALID_WEDGE_MODES = ("fma", "fp32", "naive", "direct_z2", "direct_z2_fma")
 VALID_BACKENDS = ("auto", "pytorch", "triton")
 VALID_BLOCK_STYLES = ("lie_trotter", "ggr")
 VALID_INTERACTION_TYPES = ("subspace", "rolling")
-VALID_NORM_MODES = ("bn", "ln2d", "subspace_rms")
+VALID_NORM_MODES = ("bn", "ln2d", "rmsnorm2d", "subspace_rms", "onesided_sphere", "rmsnorm2d_sphere")
 
 # Off-diagonal index pairs per subspace dimension k (arXiv:2610.37226 Sec. 3.3.2):
 #   k=2: 2D signed area [(0, 1)]
@@ -80,6 +80,25 @@ class LayerNorm2d(nn.Module):
         s = (x - u).pow(2).mean(1, keepdim=True)
         x = (x - u) / torch.sqrt(s + self.eps)
         return self.weight[:, None, None] * x + self.bias[:, None, None]
+
+
+class RMSNorm2d(nn.Module):
+    """Channel-wise RMSNorm for 2D (B, C, H, W) feature maps using fused F.rms_norm (zero-copy on NHWC)."""
+
+    def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.num_channels = num_channels
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # On channels_last (NHWC), permute(0, 2, 3, 1) is a zero-copy contiguous (B, H, W, C) view.
+        return F.rms_norm(
+            x.permute(0, 2, 3, 1),
+            (self.num_channels,),
+            self.weight.to(x.dtype),
+            self.eps,
+        ).permute(0, 3, 1, 2)
 
 
 class GeometricStem(nn.Module):
@@ -209,6 +228,7 @@ class SpatialDiffusion(nn.Module):
         kernel_size: int = 5,
         layer_scale_init_value: float = 1e-5,
         norm_type: str = "bn",
+        flat_gamma: bool = False,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -221,11 +241,17 @@ class SpatialDiffusion(nn.Module):
             groups=dim,
             bias=False,
         )
-        self.bn: nn.Module = LayerNorm2d(dim) if norm_type == "ln2d" else nn.BatchNorm2d(dim)
-        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((1, dim, 1, 1)))
+        if norm_type == "ln2d":
+            self.bn: nn.Module = LayerNorm2d(dim)
+        elif norm_type == "rmsnorm2d":
+            self.bn = RMSNorm2d(dim)
+        else:
+            self.bn = nn.BatchNorm2d(dim)
+        gamma_shape = (dim,) if flat_gamma else (1, dim, 1, 1)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(gamma_shape))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.gamma * F.silu(self.bn(self.dwconv(x)))
+        return x + self.gamma.flatten().view(1, -1, 1, 1) * F.silu(self.bn(self.dwconv(x)))
 
 
 # ============================================================================
@@ -437,6 +463,7 @@ class SubspaceGeometricProduct(nn.Module):
         use_global_context: bool = False,
         ctx_bn: bool = False,
         proj_bias: bool = False,
+        split_in_proj: bool = False,
     ) -> None:
         super().__init__()
         if k not in VALID_SUBSPACE_K:
@@ -486,10 +513,22 @@ class SubspaceGeometricProduct(nn.Module):
             self.pre_bn: nn.Module = nn.Identity()
         elif norm_mode == "ln2d":
             self.pre_bn = LayerNorm2d(dim)
+        elif norm_mode in ("rmsnorm2d", "rmsnorm2d_sphere"):
+            self.pre_bn = RMSNorm2d(dim)
         else:
             self.pre_bn = nn.BatchNorm2d(dim)
 
-        self.get_state_ctx = nn.Conv2d(dim, 2 * self.aligned_dim, kernel_size=1, bias=proj_bias)
+        self.split_in_proj = split_in_proj
+        if split_in_proj:
+            # Separate dense 1x1 convs keep z1 and z2_prime contiguous in channels_last (NHWC),
+            # avoiding .chunk(2, dim=1) strided views and hitting the fast coalesced Triton NHWC kernel.
+            self.get_state_proj = nn.Conv2d(dim, self.aligned_dim, kernel_size=1, bias=proj_bias)
+            self.get_ctx_proj = nn.Conv2d(dim, self.aligned_dim, kernel_size=1, bias=proj_bias)
+            self.get_state_ctx = None
+        else:
+            self.get_state_ctx = nn.Conv2d(dim, 2 * self.aligned_dim, kernel_size=1, bias=proj_bias)
+            self.get_state_proj = None
+            self.get_ctx_proj = None
         self.ctx_dw = nn.Conv2d(
             self.aligned_dim,
             self.aligned_dim,
@@ -499,11 +538,12 @@ class SubspaceGeometricProduct(nn.Module):
             bias=False,
         )
         if ctx_bn:
-            self.ctx_bn_layer: nn.Module = (
-                LayerNorm2d(self.aligned_dim)
-                if norm_mode == "ln2d"
-                else nn.BatchNorm2d(self.aligned_dim)
-            )
+            if norm_mode == "ln2d":
+                self.ctx_bn_layer: nn.Module = LayerNorm2d(self.aligned_dim)
+            elif norm_mode in ("rmsnorm2d", "rmsnorm2d_sphere"):
+                self.ctx_bn_layer = RMSNorm2d(self.aligned_dim)
+            else:
+                self.ctx_bn_layer = nn.BatchNorm2d(self.aligned_dim)
         else:
             self.ctx_bn_layer = nn.Identity()
         if use_global_context:
@@ -516,7 +556,8 @@ class SubspaceGeometricProduct(nn.Module):
                 groups=self.num_groups,
                 bias=False,
             )
-            self.global_beta = nn.Parameter(0.1 * torch.ones((1, self.aligned_dim, 1, 1)))
+            beta_shape = (self.aligned_dim,) if split_in_proj else (1, self.aligned_dim, 1, 1)
+            self.global_beta = nn.Parameter(0.1 * torch.ones(beta_shape))
         else:
             self.ctx_global_proj = None
             self.global_beta = None
@@ -556,11 +597,18 @@ class SubspaceGeometricProduct(nn.Module):
 
     def _prepare_streams(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.pre_bn(x)
-        z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
+        if self.split_in_proj:
+            assert self.get_state_proj is not None and self.get_ctx_proj is not None
+            z1 = self.get_state_proj(h)
+            z2_prime = self.get_ctx_proj(h)
+        else:
+            assert self.get_state_ctx is not None
+            z1, z2_prime = self.get_state_ctx(h).chunk(2, dim=1)
         z2 = self.ctx_bn_layer(self.ctx_dw(z2_prime)).to(z1.dtype)
         if self.ctx_global_proj is not None and self.global_beta is not None:
             z2_glo = self.ctx_global_proj(z2_prime.mean(dim=(-2, -1), keepdim=True))
-            z2 = (z2 + self.global_beta.to(z1.dtype) * z2_glo.to(z1.dtype)).to(z1.dtype)
+            beta = self.global_beta.flatten().view(1, -1, 1, 1).to(z1.dtype)
+            z2 = (z2 + beta * z2_glo.to(z1.dtype)).to(z1.dtype)
         if self.norm_mode == "subspace_rms":
             B, _, H, W = z1.shape
             dt = z1.dtype
@@ -570,6 +618,20 @@ class SubspaceGeometricProduct(nn.Module):
             z2_rms = torch.rsqrt(z2_g.pow(2).mean(dim=2, keepdim=True) + 1e-6)
             z1 = (z1_g * z1_rms).to(dt).reshape(B, self.aligned_dim, H, W)
             z2 = (z2_g * z2_rms).to(dt).reshape(B, self.aligned_dim, H, W)
+        elif self.norm_mode in ("onesided_sphere", "rmsnorm2d_sphere"):
+            # Degree-1 homogeneous Clifford interaction: project only context stream z2 onto
+            # each k-dimensional unit-RMS sphere while preserving state magnitude ||z1||.
+            B, _, H, W = z2.shape
+            dt = z2.dtype
+            # Keep channels_last (NHWC) layout intact so Triton hits the coalesced NHWC kernel
+            if z2.is_contiguous(memory_format=torch.channels_last):
+                z2_nhwc = z2.permute(0, 2, 3, 1).float().reshape(B, H, W, self.num_groups, self.k)
+                z2_rms = torch.rsqrt(z2_nhwc.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+                z2 = (z2_nhwc * z2_rms).to(dt).reshape(B, H, W, self.aligned_dim).permute(0, 3, 1, 2)
+            else:
+                z2_g = z2.float().reshape(B, self.num_groups, self.k, H, W)
+                z2_rms = torch.rsqrt(z2_g.pow(2).mean(dim=2, keepdim=True) + 1e-6)
+                z2 = (z2_g * z2_rms).to(dt).reshape(B, self.aligned_dim, H, W)
         return z1, z2
 
     def forward(
@@ -981,6 +1043,7 @@ class SubspaceCliffordBlock(nn.Module):
         use_global_context: bool = False,
         ctx_bn: bool = False,
         proj_bias: bool = False,
+        split_in_proj: bool = False,
     ) -> None:
         super().__init__()
         if block_style not in VALID_BLOCK_STYLES:
@@ -1002,7 +1065,12 @@ class SubspaceCliffordBlock(nn.Module):
                     dim=dim,
                     kernel_size=dw_kernel_size,
                     layer_scale_init_value=layer_scale_init_value,
-                    norm_type="ln2d" if norm_mode == "ln2d" else "bn",
+                    norm_type=(
+                        "ln2d"
+                        if norm_mode == "ln2d"
+                        else ("rmsnorm2d" if norm_mode in ("rmsnorm2d", "rmsnorm2d_sphere") else "bn")
+                    ),
+                    flat_gamma=split_in_proj,
                 )
                 if use_spatial_diffusion
                 else nn.Identity()
@@ -1026,6 +1094,7 @@ class SubspaceCliffordBlock(nn.Module):
                 use_global_context=use_global_context,
                 ctx_bn=ctx_bn,
                 proj_bias=proj_bias,
+                split_in_proj=split_in_proj,
             )
         else:
             self.interaction = RollingGeometricProduct(
@@ -1037,7 +1106,8 @@ class SubspaceCliffordBlock(nn.Module):
                 use_pre_bn=use_pre_bn,
             )
 
-        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((1, dim, 1, 1)))
+        gamma_shape = (dim,) if split_in_proj else (1, dim, 1, 1)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(gamma_shape))
         self.drop_path: nn.Module = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(
@@ -1047,12 +1117,13 @@ class SubspaceCliffordBlock(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if self.block_style == "lie_trotter":
             x_sp = self.spatial_diffusion(x)
+            gamma = self.gamma.flatten().view(1, -1, 1, 1)
             if compute_ortho:
                 g_feat, ortho_loss = self.interaction(x_sp, compute_ortho=True)
-                y = x_sp + self.drop_path(self.gamma * g_feat)
+                y = x_sp + self.drop_path(gamma * g_feat)
                 return y, ortho_loss
             g_feat = self.interaction(x_sp)
-            return x_sp + self.drop_path(self.gamma * g_feat)
+            return x_sp + self.drop_path(gamma * g_feat)
 
         shortcut = x
         x_ln = self.norm(x)
@@ -1076,18 +1147,19 @@ class SubspaceCliffordBlock(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Run single-block diagnostics + step outside torch.compile under no_grad."""
         with torch.no_grad():
+            gamma = self.gamma.flatten().view(1, -1, 1, 1)
             if self.block_style == "lie_trotter":
                 x_sp = self.spatial_diffusion(x)
                 diags = self.interaction.forward_diagnostics(x_sp)
                 g_feat = self.interaction(x_sp)
-                return x_sp + self.drop_path(self.gamma * g_feat), diags
+                return x_sp + self.drop_path(gamma * g_feat), diags
 
             x_ln = self.norm(x)
             diags = self.interaction.forward_diagnostics(x_ln)
             g_feat = self.interaction(x_ln)
             alpha = torch.sigmoid(self.gate_linear(torch.cat([x_ln, g_feat], dim=1)))
             h_mix = F.silu(x_ln) + alpha * g_feat
-            return x + self.drop_path(self.gamma * h_mix), diags
+            return x + self.drop_path(gamma * h_mix), diags
 
 
 # ============================================================================
@@ -1282,6 +1354,7 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
         use_global_context: bool = False,
         ctx_bn: bool = False,
         proj_bias: bool = False,
+        split_in_proj: bool = False,
     ) -> None:
         super().__init__()
         if len(stage_depths) == 0:
@@ -1378,6 +1451,7 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
                         use_global_context=use_global_context,
                         ctx_bn=ctx_bn,
                         proj_bias=proj_bias,
+                        split_in_proj=split_in_proj,
                     )
                 )
                 dp_idx += 1
@@ -2162,6 +2236,80 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "stage_depths": (2, 2, 8, 2),
             "stage_dims": (76, 152, 304, 640),
             "subspace_k": (2, 4, 4, 4),
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.15,
+        },
+    ),
+    "in1k_v2_pico_rmsnorm2d": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 76,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (76, 152, 304, 640),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "rmsnorm2d",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.15,
+        },
+    ),
+    "in1k_v2_pico_rmsnorm2d_fast": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 76,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (76, 152, 304, 640),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "rmsnorm2d",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "split_in_proj": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.15,
+        },
+    ),
+    "in1k_v2_pico_rmsnorm2d_sphere_fast": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 76,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (76, 152, 304, 640),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "rmsnorm2d_sphere",
+            "ctx_mode": "abs",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "split_in_proj": True,
+            "dw_kernel_size": 7,
+            "use_global_context": True,
+            "downsample_mode": "conv",
+            "drop_path_rate": 0.15,
+        },
+    ),
+    "in1k_v2_pico_onesided_sphere": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            "patch_size": 4,
+            "embed_dim": 76,
+            "stage_depths": (2, 2, 8, 2),
+            "stage_dims": (76, 152, 304, 640),
+            "subspace_k": (2, 4, 4, 4),
+            "norm_mode": "onesided_sphere",
             "ctx_mode": "abs",
             "ctx_bn": True,
             "proj_bias": True,

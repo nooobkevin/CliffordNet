@@ -221,4 +221,20 @@ Two critical scaling and systems findings emerged from Wave D:
 
 ![ImageNet-1k 100-Epoch Convergence, Scaling Pareto, BN vs LN2d Stability, and Wedge Falsification](../experiments/subspace_study/figures/in1k_100ep_convergence_and_scaling.png)
 
+### 8.4 Curing Pico scaling instability: `RMSNorm2d` vs. One-Sided Subspace Sphere Norm at `lr=4.0e-3` (Wave F, 60 runs total)
+
+To directly test our diagnosis from Section 8.3 and remove both the `torch.compile` Inductor bug and the `.chunk(2, dim=1)` strided-kernel bottleneck, we implemented three clean engineering upgrades (`F.rms_norm` zero-copy NHWC `RMSNorm2d`, `split_in_proj=True` restoring the `2,994 GB/s` coalesced Triton NHWC kernel and cutting Pico `bs=256` step time from `80.96 ms` to **`57.18 ms`** / `1.42x` faster, and 1D `flat_gamma=True` fixing PyTorch 2.10 Inductor DDP backward), plus an aspect-ratio-preserving `320x320` `/dev/shm` RAM cache (`train_shapes.npy` + `BICUBIC` val). We then ran two 90-epoch Pico models at `lr=4.0e-3` (matching `ConvNeXt-Pico`):
+
+| Run (Pico 90 ep, Global BS=1024, `bf16`) | Params | GMACs | EMA Val | 50k HF-Bicubic | Top-5 | Contrast 0.12 | Fog | Gauss | FFT phase | Peak `|wedge|` | `val/loss` NaN | `train` spikes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `in1k_convnext_pico_90ep` (`LN2d`, `lr=4e-3`) | 9.046M | 1.367G | **75.86%** | **75.72%** | 92.85% | **65.96%** | **74.07%** | **65.95%** | **55.25%** | - | 0 / 90 | 0 |
+| `in1k_v2_pico_k4_90ep` (`BN`, `lr=2.5e-3`, sq-256) | 8.499M | 1.319G | 75.43% | 74.41% | 92.20% | 63.00% | 72.14% | 60.37% | 38.78% | 3,466 | 34 / 90 | 91 |
+| **`in1k_v2_pico_rmsnorm2d_fast_lr4e3_90ep`** (`F.rms_norm`) | **8.486M** | **1.319G** | **75.45%** | **75.43%** | **92.96%** | **65.48%** | **73.68%** | **61.66%** | **43.52%** | **64.4** | **0 / 90** | **0** |
+| `in1k_v2_pico_rmsnorm2d_sphere_fast_lr4e3_90ep` (`+1-sided sphere`) | **8.486M** | **1.319G** | 74.51% | 74.58% | 92.20% | 61.69% | 72.53% | 59.86% | 40.17% | **24.3** | **0 / 90** | **0** |
+
+- **`RMSNorm2d` completely cures Pico instability at `lr=4.0e-3` and closes the gap to `ConvNeXt-Pico`:** `in1k_v2_pico_rmsnorm2d_fast_lr4e3_90ep` cuts peak `|wedge|` `54x` (`3,466 -> 64.4`), hits **`0 / 90` NaNs and `0` training spikes**, lifts 50k HF-Bicubic Top-1 by `+1.02%` (`75.43%`), **beats `ConvNeXt-Pico` on Top-5 (`92.96%` vs. `92.85%`)**, and trails `ConvNeXt-Pico` Top-1 by only `0.29%` while using `6.2%` fewer parameters and `3.5%` fewer FLOPs.
+- **Stacking One-Sided Sphere Norm on top of `RMSNorm2d` over-constrains context magnitude (`-0.85%`):** Once `RMSNorm2d` bounds per-token norms, stripping per-subspace magnitude from `z2` (`peak |wedge| = 24.3`) discards useful local contrast information (`-3.79%` on `0.12x` contrast). One-sided sphere norm is best reserved for `BatchNorm2d`-only deployments (where our mid-run probe confirmed it dropped `34/90` NaNs down to `0/64` NaNs and `0` train spikes).
+- **Lossless `/dev/shm` verification:** Preserving aspect ratio inside a `320x320` padded canvas (`train_shapes.npy`) with `BICUBIC` val eliminated the `-1.02%` square-resize validation mismatch (`75.45%` vs. `75.43%`, `74.51%` vs. `74.58%`).
+
+
 
