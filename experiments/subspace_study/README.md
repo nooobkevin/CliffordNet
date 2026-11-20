@@ -5,6 +5,7 @@ This folder holds the experimental design, reproduction commands, result tables,
 > **Note on AI-assisted execution:** The implementation (`src/cliffordnet/subspace.py`, `src/cliffordnet/kernels/triton_subspace.py`), unit tests, and 8x H800 runs in this study were built and executed using an AI coding agent (GitHub Copilot CLI) under `@nooobkevin`'s direction. All logs, manifests, and test scripts are archived here for direct verification.
 
 - Findings report: [`../../docs/subspace_clifford_research_report.md`](../../docs/subspace_clifford_research_report.md)
+- Model development & GPU tuning playbook: [`../../docs/engineering_and_tuning_playbook.md`](../../docs/engineering_and_tuning_playbook.md)
 - Model and control definitions: [`../../src/cliffordnet/subspace.py`](../../src/cliffordnet/subspace.py)
 - Recomputation Triton kernel (`k in {2, 3, 4}`): [`../../src/cliffordnet/kernels/triton_subspace.py`](../../src/cliffordnet/kernels/triton_subspace.py)
 
