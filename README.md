@@ -26,15 +26,41 @@ Key documents and code:
 
 ## Usage
 
-### Install
+### Install & Test
 
 ```bash
 uv sync
+uv run python -m unittest tests/test_triton_subspace.py tests/test_subspace_models.py
 ```
 
 ### Train
 
-The canonical entrypoint is config-driven. Later config files override earlier ones, and `--set key=value` overrides both.
+The canonical entrypoint (`cliffordnet-train`) is config-driven. Later config files override earlier ones, and `--set key=value` overrides both.
+
+ImageNet-1k (`Subspace-CAN-v2-Pico`, `RMSNorm2d` + fused Triton kernel, `bf16-mixed`, 4x GPU DDP):
+
+```bash
+uv run torchrun --standalone --nproc_per_node=4 -m cliffordnet.train \
+  --config configs/imagenet1k.yaml \
+  --config configs/profiles/imagenet1k_h800_probe.yaml \
+  --set data.data_dir=./imagenet1k \
+  --set model.size=in1k_v2_pico_rmsnorm2d_fast \
+  --set model.ortho_weight=0.0 \
+  --set runtime.devices=4 \
+  --set training.batch_size=256 \
+  --set training.target_global_batch_size=1024 \
+  --set training.max_epochs=90 \
+  --set optim.base_lr=4.0e-3
+```
+
+CIFAR-100 (200 epochs, single GPU):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run cliffordnet-train \
+  --config configs/cifar100.yaml \
+  --set data.data_dir=./data/cifar100 \
+  --set model.size=subspace_hier_k4_v2
+```
 
 Smoke test:
 
@@ -45,29 +71,45 @@ uv run cliffordnet-train \
   --set data.data_dir=./imagenet1k
 ```
 
-Stable ImageNet-1k workload:
-
-```bash
-uv run cliffordnet-train \
-  --config configs/imagenet1k.yaml \
-  --config configs/profiles/stable_imagenet1k.yaml \
-  --set data.data_dir=/t1/imagenet1k
-```
-
 Set `training.batch_size=0` to run OOM-aware batch-size probing. The trainer then auto-adjusts `training.accumulate_grad_batches` to reach `training.target_global_batch_size` and scales LR from `optim.base_lr` unless `optim.lr` is set explicitly.
 
-### Local Launcher
+### Fast `/dev/shm` RAM Cache, Profiling & Kernel Benchmark
+
+On high-RAM nodes (eliminating CPU JPEG decoding while preserving exact aspect ratios and `BICUBIC` validation parity):
+
+```bash
+# 1. Build one-time aspect-ratio-preserving 320x320 uint8 cache in /dev/shm (~374 GiB)
+uv run python scripts/build_in1k_ram_cache.py \
+  --data-dir ./imagenet1k \
+  --out-dir /dev/shm/in1k_raw_cache_ar320 \
+  --canvas 320 \
+  --workers 128
+
+# 2. Point training at the cache (ImageNet1kDataModule auto-detects train.done/val.done)
+#    --set data.data_dir=/dev/shm/in1k_raw_cache_ar320 --set data.num_workers=6
+```
+
+Profile CUDA operator time and launch/sync gaps without Nsight, or benchmark the Triton kernel against eager PyTorch and `torch.compile`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run python scripts/profile_bottleneck.py \
+  --model in1k_v2_pico_rmsnorm2d_fast --batch-size 256 --compile
+
+CUDA_VISIBLE_DEVICES=0 uv run python scripts/benchmark_subspace_kernel.py
+```
+
+### Local & Slurm Launchers
+
+Local multi-GPU launcher:
 
 ```bash
 uv run cliffordnet-launch \
   --launcher local \
   --config configs/imagenet1k.yaml \
   --config configs/profiles/stress.yaml \
-  --set data.data_dir=/t1/imagenet1k \
+  --set data.data_dir=./imagenet1k \
   --set runtime.devices=8
 ```
-
-### Slurm Launcher
 
 Generate and submit a Slurm script:
 
@@ -77,48 +119,52 @@ uv run cliffordnet-launch \
   --submit \
   --config configs/imagenet1k.yaml \
   --config configs/profiles/stress.yaml \
-  --config configs/profiles/slurm_t1.yaml \
-  --set data.data_dir=/t1/imagenet1k \
+  --config configs/profiles/slurm_h800.yaml \
+  --set data.data_dir=./imagenet1k \
   --set slurm.account=<account> \
   --set slurm.partition=<partition> \
-  --set slurm.nodes=2 \
-  --set slurm.gpus_per_node=6
+  --set slurm.nodes=1 \
+  --set slurm.gpus_per_node=8
 ```
 
 `run.sh` is a thin wrapper around the Slurm launcher. `run_training.sh` is a thin wrapper around the local launcher.
 
-### Config Profiles
+### Config Profiles & Experiment Specs
 
-- `configs/imagenet1k.yaml`: base workload config
+- `configs/imagenet1k.yaml`: base ImageNet-1k workload config
+- `configs/cifar100.yaml`: base CIFAR-100 200-epoch config (`model.ortho_weight=0.0`)
+- `configs/profiles/imagenet1k_h800_probe.yaml`: H800 ImageNet-1k `bf16` profile (`ortho_weight=0.0`, fast `uint8` GPU preprocessing)
 - `configs/profiles/smoke.yaml`: tiny offline smoke run
 - `configs/profiles/probe.yaml`: short probe model run for quick signal
 - `configs/profiles/stress.yaml`: long-running HPC workload profile
-- `configs/profiles/stable_imagenet1k.yaml`: conservative recipe for ImageNet-1k loss-spike experiments
-- `configs/profiles/slurm_t1.yaml`: site-neutral Slurm defaults
+- `configs/profiles/stable_imagenet1k.yaml`: conservative recipe for early `BatchNorm` / `ortho_weight` stability tests
+- `configs/profiles/slurm_h800.yaml` & `configs/profiles/slurm_t1.yaml`: site-neutral Slurm defaults
+- `configs/experiments/cifar100_wave*.json`: 8-GPU parallel CIFAR-100 specs for `scripts/run_parallel_experiments.py`
 
 ### Resume
 
 By default `checkpoint.resume=auto`. The trainer resumes from `last.ckpt` or `preempted.ckpt` under `run.output_dir/run.name/checkpoints` when present. Set a stable `run.name` to resume a local run; the Slurm launcher freezes `run.name` in the generated script automatically. SIGTERM triggers a `preempted.ckpt` save before exit.
 
-### W&B
+### W&B & SwanLab Tracking
 
-W&B is online by default. Each run logs the merged config, detected GPU/CPU/Slurm resources, computed batch/accumulation/LR settings, and a `run_manifest.yaml` artifact. Set `wandb.mode=offline` for offline runs.
+W&B is online by default; set `wandb.mode=offline` for offline local datastores. Each run saves a merged `run_manifest.yaml` with detected GPU/CPU/Slurm resources and resolved batch/LR settings.
 
-### Legacy Entrypoint
+To stream live metrics to SwanLab while keeping offline W&B logs (no extra code changes required):
+
+```bash
+--set wandb.mode=offline --set wandb.swanlab=true --set wandb.group=<experiment_group>
+```
+
+Historical offline runs can also be backfilled via `uv run python scripts/sync_runs_to_swanlab.py`.
+
+### Legacy Entrypoint & GPU Stress Test
 
 ```bash
 uv run python -m cliffordnet.tasks.imagenet1k --help
-```
-
-The canonical ImageNet-1k task lives at `src/cliffordnet/tasks/imagenet1k.py`. New workloads should use `cliffordnet-train` or `cliffordnet-launch`.
-
-### GPU Stress Test
-
-```bash
 bash scripts/gpu_stress_test.sh
 ```
 
-Runs single-GPU tests on each card, then a multi-GPU DDP communication test.
+New workloads should use `cliffordnet-train` or `cliffordnet-launch`. `gpu_stress_test.sh` runs per-card compute checks followed by a multi-GPU DDP communication test.
 
 ## Repository Layout
 
@@ -136,77 +182,62 @@ Runs single-GPU tests on each card, then a multi-GPU DDP communication test.
 
 ## Diagnostic Metrics
 
-When `--enable-diagnostics` is on (default), the trainer logs wedge-product health metrics every `--diag-log-interval` steps under the `diag/` prefix. These metrics diagnose numerical stability of the Clifford geometric product.
+When `model.enable_diagnostics=true` (default), the trainer logs geometric-product health metrics every `model.diag_log_interval` steps under the `diag/` prefix.
 
 ### Background
 
-The wedge product computes `a*b - c*d` (difference of two products). When `a*b` and `c*d` are nearly equal, subtraction causes catastrophic cancellation, especially in `bf16` (7-bit mantissa). The diagnostics measure how much cancellation occurs and whether the wedge branch still contributes useful signal.
+The wedge product computes `a*b - c*d` (difference of two products). When `a*b` and `c*d` are nearly equal, subtraction causes catastrophic cancellation in `bf16` (7-bit mantissa). In addition, because the geometric product is quadratic ($O(M^2)$), unbounded spatial outliers under `BatchNorm2d` can explode wedge activations and corrupt BN running statistics. The diagnostics track both cancellation and magnitude/spectrum health.
 
-### Cancellation
+### Cancellation & Invariance
 
 ```
-term_a = z_det * z_ctx_rolled          (= a*b)
-term_b = z_det_rolled * z_ctx          (= c*d)
+term_a = u_i * v_j
+term_b = u_j * v_i
 rel_diff = |term_a - term_b| / (|term_a| + |term_b| + ε)
 ```
 
 | Metric | Meaning | Healthy | Concerning |
 |--------|---------|---------|------------|
-| `cancel/rel_diff_mean` | Average relative difference across all elements. Smaller = more cancellation. | > 0.1 | < 0.01 (wedge is computing near-zero, signal drowned by noise) |
-| `cancel/rel_diff_lt1e-2` | Fraction of elements with rel_diff < 1%. Measures how many elements suffer severe cancellation. | < 20% | > 50% (majority of wedge elements are noise) |
-| `cancel/rel_diff_lt1e-4` | Fraction with rel_diff < 0.01%. Extreme cancellation where bf16 effective precision is near zero. | < 5% | > 10% |
+| `cancel/rel_diff_mean` | Average relative difference across all bivector terms. | > 0.1 | < 0.01 (wedge computing near-zero) |
+| `cancel/rel_diff_lt1e-2` | Fraction of terms with `rel_diff < 1%`. | < 5% (typically `~0.4%` with `fp32` FMA) | > 50% (majority of wedge terms are noise) |
+| `cancel/rel_diff_lt1e-4` | Fraction with `rel_diff < 0.01%`. | < 1% | > 10% |
+| `invariance/lambda_wedge_rel_err` | Relative error between `u ^ (z2 - u)` and `u ^ z2` in stream dtype. | < 0.05 | > 1.0 (use `wedge_mode=fma` or `ctx_mode=abs`) |
 
-If `rel_diff_lt1e-2` rises during training, det and ctx branches are learning similar representations and the wedge is degenerating. Increase `--ortho-weight` or switch to `fma` wedge mode.
-
-### Magnitude
+### Magnitude & Feature Spectrum
 
 | Metric | Meaning | How to read |
 |--------|---------|-------------|
-| `magnitude/wedge_abs_mean` | Mean |wedge| output | Compare with dot. If wedge << dot (>100x gap), wedge branch contributes almost nothing downstream. |
-| `magnitude/wedge_abs_max` | Max |wedge| output | Sudden spikes suggest numerical explosion. Check if accompanied by `inf_count > 0`. |
-| `magnitude/dot_abs_mean` | Mean |dot| output (SiLU(a*b)) | Baseline reference for gauging wedge's relative importance. |
+| `magnitude/wedge_abs_mean` | Mean `|wedge|` output | Compare with `dot_abs_mean` via `magnitude/wedge_to_dot_ratio`. |
+| `magnitude/wedge_abs_max` | Peak `|wedge|` output | Healthy is `< 100` (`~44–64` under `LN2d`/`RMSNorm2d`). Values `> 1,000` under `BatchNorm2d` signal quadratic outlier spikes that trigger `val/loss = NaN`. |
+| `magnitude/dot_abs_mean` | Mean `|dot|` output (`SiLU(u*v)`) | Baseline reference for gauging inner vs. wedge balance. |
+| `magnitude/wedge_to_dot_ratio` | `wedge_abs_mean / dot_abs_mean` | Target `0.5 to 3.5`. `> 10` means inner branch is starved (for example `18.3x` in v1 `diff` dead-zone); `< 0.01` means wedge is degenerate. |
+| `spectrum/effective_rank` | Normalized SVD entropy effective rank of block output in `(0, 1]` | Higher is richer (`~0.70–0.75` on ImageNet-1k); sudden drop signals feature collapse. |
 
-The target ratio is `wedge_abs_mean / dot_abs_mean`:
-- `0.1 to 3.0`: Healthy. Both branches contribute geometric and gating information.
-- `< 0.01`: Wedge degenerate, usually from cancellation or initialization.
-- `> 10`: Wedge dominant (for example, `18.3x` in v1 when unnormalized `diff` starved the inner branch, or during BN outlier spikes).
-
-### Health
+### Health & Orthogonality
 
 | Metric | Meaning | Expectation |
 |--------|---------|-------------|
-| `health/nan_count` | Number of NaN values in wedge output | **Must be 0.** Any nonzero = numerical breakdown. |
-| `health/inf_count` | Number of Inf values in wedge output | **Must be 0.** Usually bf16 overflow (values exceeding ±3.39e+38). |
+| `health/nan_count` / `health/inf_count` | Number of `NaN` / `Inf` values in geometric-product outputs | **Must be 0.** |
+| `ortho/cos_sim_mean` | Mean `|cos(z_state, z_ctx)|` across channels | Lower is more orthogonal. |
+| `ortho/subspace_cos_sim_mean` | Mean `|cos(u, v)|` inside each $k$-dimensional subspace | Lower reduces cancellation. |
 
-Hard pass/fail indicators. If nonzero, check: (1) whether using `naive` wedge mode, (2) whether learning rate is too high.
-
-### Orthogonality
-
-```
-cos_sim = cosine_similarity(z_det, z_ctx, dim=channel)   # per spatial position
-ortho/cos_sim_mean = mean(|cos_sim|)
-```
-
-| Metric | Meaning | How to read |
-|--------|---------|-------------|
-| `ortho/cos_sim_mean` | Average channel-wise cosine similarity between det and ctx features | 0 = perfectly orthogonal, 1 = perfectly parallel. Lower is better. |
-
-This metric is causally linked to cancellation: high `cos_sim_mean` → det/ctx learn similar features → `a*b ≈ c*d` → severe cancellation → wedge degenerates. The `--ortho-weight` hyperparameter controls the loss term that pushes this value down.
+> **Note on `model.ortho_weight`:** All 60 runs in our Subspace Clifford study used `model.ortho_weight=0.0` (standard cross-entropy only). With `RMSNorm2d` / `LayerNorm2d` and `fp32` FMA determinants inside the `bf16` Triton kernel, cancellation stays around `0.4%` naturally without needing an auxiliary orthogonality loss.
 
 ### Triage Flowchart
 
 ```
-1. health/nan_count > 0 or inf_count > 0?
-   ├─ YES → Stop training. Lower lr or switch wedge_mode.
+1. health/nan_count > 0, inf_count > 0, or val/loss = NaN?
+   ├─ YES → Check magnitude/wedge_abs_max:
+   │        ├─ > 500 with BatchNorm2d → Replace BN with RMSNorm2d/LayerNorm2d (or add onesided_sphere)
+   │        └─ Otherwise → Ensure model.wedge_mode=fma and check inner gate (use SiLU(u*v), not SiLU(u)*v)
    └─ NO  → continue ↓
 
-2. cancel/rel_diff_lt1e-2 > 50%?
-   ├─ YES → Check ortho/cos_sim_mean
-   │        ├─ > 0.5 → Increase --ortho-weight
-   │        └─ < 0.3 → Cancellation not from alignment; switch to fma mode
+2. magnitude/wedge_to_dot_ratio > 10?
+   ├─ YES → Inner branch starved by SiLU <-1.28 dead-zone (unnormalized DWConv + diff).
+   │        Enable ctx_bn=True, ctx_mode="abs", proj_bias=True.
    └─ NO  → continue ↓
 
-3. wedge_abs_mean / dot_abs_mean < 0.01?
-   ├─ YES → Wedge branch ineffective (init or gradient issue)
-   └─ NO  → Numerically stable, wedge working normally
+3. cancel/rel_diff_lt1e-2 > 50%?
+   ├─ YES → Verify model.wedge_mode=fma; if ortho/cos_sim_mean > 0.5, optionally set model.ortho_weight=0.01.
+   └─ NO  → Numerically stable and balanced.
 ```
