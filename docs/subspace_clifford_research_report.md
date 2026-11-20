@@ -236,5 +236,9 @@ To directly test our diagnosis from Section 8.3 and remove both the `torch.compi
 - **Stacking One-Sided Sphere Norm on top of `RMSNorm2d` over-constrains context magnitude (`-0.85%`):** Once `RMSNorm2d` bounds per-token norms, stripping per-subspace magnitude from `z2` (`peak |wedge| = 24.3`) discards useful local contrast information (`-3.79%` on `0.12x` contrast). One-sided sphere norm is best reserved for `BatchNorm2d`-only deployments (where our mid-run probe confirmed it dropped `34/90` NaNs down to `0/64` NaNs and `0` train spikes).
 - **Lossless `/dev/shm` verification:** Preserving aspect ratio inside a `320x320` padded canvas (`train_shapes.npy`) with `BICUBIC` val eliminated the `-1.02%` square-resize validation mismatch (`75.45%` vs. `75.43%`, `74.51%` vs. `74.58%`).
 
+![Pico Scaling Instability & RMSNorm2d Cure](../experiments/subspace_study/figures/in1k_pico_instability_and_cure.png)
+
+![ImageNet-1k 100-Epoch Convergence, Scaling Pareto, BN vs LN2d Stability, and Wedge Falsification](../experiments/subspace_study/figures/in1k_100ep_convergence_and_scaling.png)
+
 
 

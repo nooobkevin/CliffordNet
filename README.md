@@ -20,6 +20,8 @@ Key documents and code:
 
 ![First-Principles v2 Ablation Ladder](./experiments/subspace_study/figures/in1k_v2_ablation_ladder.png)
 
+![Pico Scaling Instability & RMSNorm2d Cure](./experiments/subspace_study/figures/in1k_pico_instability_and_cure.png)
+
 ![100-Epoch Convergence, Pico/Nano Scaling, and BN vs LN2d/RMSNorm2d Stability](./experiments/subspace_study/figures/in1k_100ep_convergence_and_scaling.png)
 
 ## Usage
