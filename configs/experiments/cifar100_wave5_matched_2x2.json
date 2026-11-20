@@ -1,0 +1,72 @@
+[
+  {
+    "name": "m2x2_orig_full_s42",
+    "track": "Matched-2x2",
+    "description": "Cell A (Orig diff + no ctx_bn, Full k=4, proj_bias=True, dpr=0.20, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_full", "run.seed=42", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_orig_full_s101",
+    "track": "Matched-2x2",
+    "description": "Cell A (Orig diff + no ctx_bn, Full k=4, proj_bias=True, dpr=0.20, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_full", "run.seed=101", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_orig_full_s202",
+    "track": "Matched-2x2",
+    "description": "Cell A (Orig diff + no ctx_bn, Full k=4, proj_bias=True, dpr=0.20, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_full", "run.seed=202", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_orig_inner_s42",
+    "track": "Matched-2x2",
+    "description": "Cell B (Orig diff + no ctx_bn, Inner-wide, proj_bias=True, dpr=0.20, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_inner_wide", "run.seed=42", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_orig_inner_s101",
+    "track": "Matched-2x2",
+    "description": "Cell B (Orig diff + no ctx_bn, Inner-wide, proj_bias=True, dpr=0.20, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_inner_wide", "run.seed=101", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_orig_inner_s202",
+    "track": "Matched-2x2",
+    "description": "Cell B (Orig diff + no ctx_bn, Inner-wide, proj_bias=True, dpr=0.20, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_orig_inner_wide", "run.seed=202", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_fixed_full_s101",
+    "track": "Matched-2x2",
+    "description": "Cell C (Fixed abs + ctx_bn, Full k=4, proj_bias=True, dpr=0.20, seed=101; s42 reused from Wave 4)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2", "run.seed=101", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_fixed_inner_s101",
+    "track": "Matched-2x2",
+    "description": "Cell D (Fixed abs + ctx_bn, Inner-wide, proj_bias=True, dpr=0.20, seed=101; s42 reused from Wave 4)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_inner_wide", "run.seed=101", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_fixed_full_s202",
+    "track": "Matched-2x2",
+    "description": "Cell C (Fixed abs + ctx_bn, Full k=4, proj_bias=True, dpr=0.20, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2", "run.seed=202", "wandb.group=wave5_matched_2x2"]
+  },
+  {
+    "name": "m2x2_fixed_inner_s202",
+    "track": "Matched-2x2",
+    "description": "Cell D (Fixed abs + ctx_bn, Inner-wide, proj_bias=True, dpr=0.20, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_inner_wide", "run.seed=202", "wandb.group=wave5_matched_2x2"]
+  }
+]

@@ -1,0 +1,805 @@
+{
+  "status": "complete",
+  "protocol": "CIFAR-100 200-epoch matched 2x2 control (seeds 42, 101, 202; identical dw5 backbone, proj_bias=True, dpr=0.20, AdamW lr=1e-3, wd=0.1)",
+  "cells": {
+    "A_orig_full": {
+      "label": "Cell A: Original context (diff, no ctx_bn) + Full (Inner + Wedge)",
+      "context": "original",
+      "branch": "full",
+      "params_m": 1.124,
+      "per_seed": {
+        "42": {
+          "ckpt": "acc1=0.7845.ckpt",
+          "params_m": 1.124,
+          "clean_top1": 78.44,
+          "contrast_012": 57.08,
+          "gaussian_noise": 16.36,
+          "fft_phase": 33.86,
+          "effective_rank": 0.7193,
+          "deadzone": {
+            "overall_deadzone_pct": 31.65,
+            "stage3_deadzone_pct": 37.7,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 17.71,
+                "mean_uv": -0.83,
+                "wedge_to_dot": 0.78
+              },
+              "stage2": {
+                "deadzone_pct": 34.54,
+                "mean_uv": -1.686,
+                "wedge_to_dot": 3.62
+              },
+              "stage3": {
+                "deadzone_pct": 37.7,
+                "mean_uv": -2.087,
+                "wedge_to_dot": 6.13
+              }
+            }
+          }
+        },
+        "101": {
+          "ckpt": "acc1=0.7817.ckpt",
+          "params_m": 1.124,
+          "clean_top1": 78.17,
+          "contrast_012": 54.4,
+          "gaussian_noise": 19.28,
+          "fft_phase": 32.61,
+          "effective_rank": 0.7166,
+          "deadzone": {
+            "overall_deadzone_pct": 31.81,
+            "stage3_deadzone_pct": 37.64,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 18.87,
+                "mean_uv": -0.866,
+                "wedge_to_dot": 0.77
+              },
+              "stage2": {
+                "deadzone_pct": 34.24,
+                "mean_uv": -1.645,
+                "wedge_to_dot": 3.49
+              },
+              "stage3": {
+                "deadzone_pct": 37.64,
+                "mean_uv": -2.09,
+                "wedge_to_dot": 6.19
+              }
+            }
+          }
+        },
+        "202": {
+          "ckpt": "acc1=0.7897.ckpt",
+          "params_m": 1.124,
+          "clean_top1": 78.97,
+          "contrast_012": 54.8,
+          "gaussian_noise": 16.34,
+          "fft_phase": 32.82,
+          "effective_rank": 0.7188,
+          "deadzone": {
+            "overall_deadzone_pct": 31.21,
+            "stage3_deadzone_pct": 38.06,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 16.21,
+                "mean_uv": -0.749,
+                "wedge_to_dot": 0.78
+              },
+              "stage2": {
+                "deadzone_pct": 33.91,
+                "mean_uv": -1.613,
+                "wedge_to_dot": 3.44
+              },
+              "stage3": {
+                "deadzone_pct": 38.06,
+                "mean_uv": -2.137,
+                "wedge_to_dot": 6.25
+              }
+            }
+          }
+        }
+      },
+      "summary": {
+        "clean_top1": {
+          "mean": 78.53,
+          "std": 0.41,
+          "values": [
+            78.44,
+            78.17,
+            78.97
+          ]
+        },
+        "contrast_012": {
+          "mean": 55.43,
+          "std": 1.45,
+          "values": [
+            57.08,
+            54.4,
+            54.8
+          ]
+        },
+        "gaussian_noise": {
+          "mean": 17.33,
+          "std": 1.69,
+          "values": [
+            16.36,
+            19.28,
+            16.34
+          ]
+        },
+        "fft_phase": {
+          "mean": 33.1,
+          "std": 0.67,
+          "values": [
+            33.86,
+            32.61,
+            32.82
+          ]
+        },
+        "effective_rank": {
+          "mean": 0.718,
+          "std": 0.001,
+          "values": [
+            0.719,
+            0.717,
+            0.719
+          ]
+        },
+        "overall_deadzone_pct": {
+          "mean": 31.56,
+          "std": 0.31,
+          "values": [
+            31.65,
+            31.81,
+            31.21
+          ]
+        },
+        "stage3_deadzone_pct": {
+          "mean": 37.8,
+          "std": 0.23,
+          "values": [
+            37.7,
+            37.64,
+            38.06
+          ]
+        }
+      }
+    },
+    "B_orig_inner": {
+      "label": "Cell B: Original context (diff, no ctx_bn) + Inner-wide (0 Bivectors)",
+      "context": "original",
+      "branch": "inner_wide",
+      "params_m": 1.133,
+      "per_seed": {
+        "42": {
+          "ckpt": "acc1=0.7778.ckpt",
+          "params_m": 1.133,
+          "clean_top1": 77.78,
+          "contrast_012": 52.17,
+          "gaussian_noise": 13.0,
+          "fft_phase": 30.94,
+          "effective_rank": 0.703,
+          "deadzone": {
+            "overall_deadzone_pct": 15.29,
+            "stage3_deadzone_pct": 15.18,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 14.95,
+                "mean_uv": -0.683,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 15.67,
+                "mean_uv": -0.577,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 15.18,
+                "mean_uv": -0.487,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        },
+        "101": {
+          "ckpt": "acc1=0.7737.ckpt",
+          "params_m": 1.133,
+          "clean_top1": 77.37,
+          "contrast_012": 54.2,
+          "gaussian_noise": 13.89,
+          "fft_phase": 34.31,
+          "effective_rank": 0.7054,
+          "deadzone": {
+            "overall_deadzone_pct": 15.19,
+            "stage3_deadzone_pct": 15.17,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 15.12,
+                "mean_uv": -0.702,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 15.28,
+                "mean_uv": -0.559,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 15.17,
+                "mean_uv": -0.491,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        },
+        "202": {
+          "ckpt": "acc1=0.7782.ckpt",
+          "params_m": 1.133,
+          "clean_top1": 77.79,
+          "contrast_012": 53.69,
+          "gaussian_noise": 12.3,
+          "fft_phase": 31.96,
+          "effective_rank": 0.708,
+          "deadzone": {
+            "overall_deadzone_pct": 15.12,
+            "stage3_deadzone_pct": 15.73,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 14.53,
+                "mean_uv": -0.695,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 14.8,
+                "mean_uv": -0.542,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 15.73,
+                "mean_uv": -0.509,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        }
+      },
+      "summary": {
+        "clean_top1": {
+          "mean": 77.65,
+          "std": 0.24,
+          "values": [
+            77.78,
+            77.37,
+            77.79
+          ]
+        },
+        "contrast_012": {
+          "mean": 53.35,
+          "std": 1.06,
+          "values": [
+            52.17,
+            54.2,
+            53.69
+          ]
+        },
+        "gaussian_noise": {
+          "mean": 13.06,
+          "std": 0.8,
+          "values": [
+            13.0,
+            13.89,
+            12.3
+          ]
+        },
+        "fft_phase": {
+          "mean": 32.4,
+          "std": 1.73,
+          "values": [
+            30.94,
+            34.31,
+            31.96
+          ]
+        },
+        "effective_rank": {
+          "mean": 0.705,
+          "std": 0.003,
+          "values": [
+            0.703,
+            0.705,
+            0.708
+          ]
+        },
+        "overall_deadzone_pct": {
+          "mean": 15.2,
+          "std": 0.09,
+          "values": [
+            15.29,
+            15.19,
+            15.12
+          ]
+        },
+        "stage3_deadzone_pct": {
+          "mean": 15.36,
+          "std": 0.32,
+          "values": [
+            15.18,
+            15.17,
+            15.73
+          ]
+        }
+      }
+    },
+    "C_fixed_full": {
+      "label": "Cell C: Fixed context (abs + ctx_bn) + Full (Inner + Wedge)",
+      "context": "fixed",
+      "branch": "full",
+      "params_m": 1.128,
+      "per_seed": {
+        "42": {
+          "ckpt": "acc1=0.7921.ckpt",
+          "params_m": 1.128,
+          "clean_top1": 79.21,
+          "contrast_012": 58.58,
+          "gaussian_noise": 18.81,
+          "fft_phase": 36.38,
+          "effective_rank": 0.7352,
+          "deadzone": {
+            "overall_deadzone_pct": 5.54,
+            "stage3_deadzone_pct": 6.25,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 6.11,
+                "mean_uv": 0.069,
+                "wedge_to_dot": 2.57
+              },
+              "stage2": {
+                "deadzone_pct": 4.24,
+                "mean_uv": 0.11,
+                "wedge_to_dot": 2.73
+              },
+              "stage3": {
+                "deadzone_pct": 6.25,
+                "mean_uv": 0.043,
+                "wedge_to_dot": 3.01
+              }
+            }
+          }
+        },
+        "101": {
+          "ckpt": "acc1=0.7864.ckpt",
+          "params_m": 1.128,
+          "clean_top1": 78.65,
+          "contrast_012": 55.68,
+          "gaussian_noise": 17.21,
+          "fft_phase": 35.03,
+          "effective_rank": 0.7259,
+          "deadzone": {
+            "overall_deadzone_pct": 5.66,
+            "stage3_deadzone_pct": 6.37,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 6.17,
+                "mean_uv": 0.06,
+                "wedge_to_dot": 2.72
+              },
+              "stage2": {
+                "deadzone_pct": 4.38,
+                "mean_uv": 0.104,
+                "wedge_to_dot": 2.78
+              },
+              "stage3": {
+                "deadzone_pct": 6.37,
+                "mean_uv": 0.048,
+                "wedge_to_dot": 2.99
+              }
+            }
+          }
+        },
+        "202": {
+          "ckpt": "acc1=0.7864.ckpt",
+          "params_m": 1.128,
+          "clean_top1": 78.64,
+          "contrast_012": 57.26,
+          "gaussian_noise": 16.68,
+          "fft_phase": 34.29,
+          "effective_rank": 0.7288,
+          "deadzone": {
+            "overall_deadzone_pct": 5.73,
+            "stage3_deadzone_pct": 6.57,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 6.07,
+                "mean_uv": 0.063,
+                "wedge_to_dot": 2.62
+              },
+              "stage2": {
+                "deadzone_pct": 4.43,
+                "mean_uv": 0.108,
+                "wedge_to_dot": 2.72
+              },
+              "stage3": {
+                "deadzone_pct": 6.57,
+                "mean_uv": 0.045,
+                "wedge_to_dot": 3.0
+              }
+            }
+          }
+        }
+      },
+      "summary": {
+        "clean_top1": {
+          "mean": 78.83,
+          "std": 0.33,
+          "values": [
+            79.21,
+            78.65,
+            78.64
+          ]
+        },
+        "contrast_012": {
+          "mean": 57.17,
+          "std": 1.45,
+          "values": [
+            58.58,
+            55.68,
+            57.26
+          ]
+        },
+        "gaussian_noise": {
+          "mean": 17.57,
+          "std": 1.11,
+          "values": [
+            18.81,
+            17.21,
+            16.68
+          ]
+        },
+        "fft_phase": {
+          "mean": 35.23,
+          "std": 1.06,
+          "values": [
+            36.38,
+            35.03,
+            34.29
+          ]
+        },
+        "effective_rank": {
+          "mean": 0.73,
+          "std": 0.005,
+          "values": [
+            0.735,
+            0.726,
+            0.729
+          ]
+        },
+        "overall_deadzone_pct": {
+          "mean": 5.64,
+          "std": 0.1,
+          "values": [
+            5.54,
+            5.66,
+            5.73
+          ]
+        },
+        "stage3_deadzone_pct": {
+          "mean": 6.4,
+          "std": 0.16,
+          "values": [
+            6.25,
+            6.37,
+            6.57
+          ]
+        }
+      }
+    },
+    "D_fixed_inner": {
+      "label": "Cell D: Fixed context (abs + ctx_bn) + Inner-wide (0 Bivectors)",
+      "context": "fixed",
+      "branch": "inner_wide",
+      "params_m": 1.138,
+      "per_seed": {
+        "42": {
+          "ckpt": "acc1=0.7955.ckpt",
+          "params_m": 1.138,
+          "clean_top1": 79.56,
+          "contrast_012": 58.63,
+          "gaussian_noise": 16.14,
+          "fft_phase": 33.49,
+          "effective_rank": 0.7091,
+          "deadzone": {
+            "overall_deadzone_pct": 7.52,
+            "stage3_deadzone_pct": 5.56,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 14.13,
+                "mean_uv": -0.194,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 5.02,
+                "mean_uv": 0.206,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 5.56,
+                "mean_uv": 0.09,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        },
+        "101": {
+          "ckpt": "acc1=0.7940.ckpt",
+          "params_m": 1.138,
+          "clean_top1": 79.4,
+          "contrast_012": 57.18,
+          "gaussian_noise": 16.78,
+          "fft_phase": 34.06,
+          "effective_rank": 0.7059,
+          "deadzone": {
+            "overall_deadzone_pct": 7.73,
+            "stage3_deadzone_pct": 5.7,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 14.68,
+                "mean_uv": -0.195,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 5.04,
+                "mean_uv": 0.18,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 5.7,
+                "mean_uv": 0.087,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        },
+        "202": {
+          "ckpt": "acc1=0.7957.ckpt",
+          "params_m": 1.138,
+          "clean_top1": 79.57,
+          "contrast_012": 59.35,
+          "gaussian_noise": 18.95,
+          "fft_phase": 33.33,
+          "effective_rank": 0.7114,
+          "deadzone": {
+            "overall_deadzone_pct": 7.51,
+            "stage3_deadzone_pct": 5.49,
+            "per_stage": {
+              "stage1": {
+                "deadzone_pct": 14.24,
+                "mean_uv": -0.183,
+                "wedge_to_dot": 0.0
+              },
+              "stage2": {
+                "deadzone_pct": 4.98,
+                "mean_uv": 0.205,
+                "wedge_to_dot": 0.0
+              },
+              "stage3": {
+                "deadzone_pct": 5.49,
+                "mean_uv": 0.105,
+                "wedge_to_dot": 0.0
+              }
+            }
+          }
+        }
+      },
+      "summary": {
+        "clean_top1": {
+          "mean": 79.51,
+          "std": 0.1,
+          "values": [
+            79.56,
+            79.4,
+            79.57
+          ]
+        },
+        "contrast_012": {
+          "mean": 58.39,
+          "std": 1.11,
+          "values": [
+            58.63,
+            57.18,
+            59.35
+          ]
+        },
+        "gaussian_noise": {
+          "mean": 17.29,
+          "std": 1.47,
+          "values": [
+            16.14,
+            16.78,
+            18.95
+          ]
+        },
+        "fft_phase": {
+          "mean": 33.63,
+          "std": 0.38,
+          "values": [
+            33.49,
+            34.06,
+            33.33
+          ]
+        },
+        "effective_rank": {
+          "mean": 0.709,
+          "std": 0.003,
+          "values": [
+            0.709,
+            0.706,
+            0.711
+          ]
+        },
+        "overall_deadzone_pct": {
+          "mean": 7.59,
+          "std": 0.12,
+          "values": [
+            7.52,
+            7.73,
+            7.51
+          ]
+        },
+        "stage3_deadzone_pct": {
+          "mean": 5.58,
+          "std": 0.11,
+          "values": [
+            5.56,
+            5.7,
+            5.49
+          ]
+        }
+      }
+    }
+  },
+  "interactions": {
+    "clean_top1": {
+      "orig_gap_A_minus_B": {
+        "mean": 0.88,
+        "std": 0.27,
+        "values": [
+          0.66,
+          0.8,
+          1.18
+        ]
+      },
+      "fixed_gap_C_minus_D": {
+        "mean": -0.68,
+        "std": 0.3,
+        "values": [
+          -0.35,
+          -0.75,
+          -0.93
+        ]
+      },
+      "interaction_AB_minus_CD": {
+        "mean": 1.56,
+        "std": 0.55,
+        "values": [
+          1.01,
+          1.55,
+          2.11
+        ]
+      }
+    },
+    "contrast_012": {
+      "orig_gap_A_minus_B": {
+        "mean": 2.07,
+        "std": 2.5,
+        "values": [
+          4.91,
+          0.2,
+          1.11
+        ]
+      },
+      "fixed_gap_C_minus_D": {
+        "mean": -1.21,
+        "std": 1.05,
+        "values": [
+          -0.05,
+          -1.5,
+          -2.09
+        ]
+      },
+      "interaction_AB_minus_CD": {
+        "mean": 3.29,
+        "std": 1.63,
+        "values": [
+          4.96,
+          1.7,
+          3.2
+        ]
+      }
+    },
+    "gaussian_noise": {
+      "orig_gap_A_minus_B": {
+        "mean": 4.26,
+        "std": 1.03,
+        "values": [
+          3.36,
+          5.39,
+          4.04
+        ]
+      },
+      "fixed_gap_C_minus_D": {
+        "mean": 0.28,
+        "std": 2.47,
+        "values": [
+          2.67,
+          0.43,
+          -2.27
+        ]
+      },
+      "interaction_AB_minus_CD": {
+        "mean": 3.99,
+        "std": 2.93,
+        "values": [
+          0.69,
+          4.96,
+          6.31
+        ]
+      }
+    },
+    "fft_phase": {
+      "orig_gap_A_minus_B": {
+        "mean": 0.69,
+        "std": 2.31,
+        "values": [
+          2.92,
+          -1.7,
+          0.86
+        ]
+      },
+      "fixed_gap_C_minus_D": {
+        "mean": 1.61,
+        "std": 1.11,
+        "values": [
+          2.89,
+          0.97,
+          0.96
+        ]
+      },
+      "interaction_AB_minus_CD": {
+        "mean": -0.91,
+        "std": 1.52,
+        "values": [
+          0.03,
+          -2.67,
+          -0.1
+        ]
+      }
+    },
+    "effective_rank": {
+      "orig_gap_A_minus_B": {
+        "mean": 0.013,
+        "std": 0.003,
+        "values": [
+          0.016,
+          0.011,
+          0.011
+        ]
+      },
+      "fixed_gap_C_minus_D": {
+        "mean": 0.021,
+        "std": 0.004,
+        "values": [
+          0.026,
+          0.02,
+          0.017
+        ]
+      },
+      "interaction_AB_minus_CD": {
+        "mean": -0.008,
+        "std": 0.002,
+        "values": [
+          -0.01,
+          -0.009,
+          -0.007
+        ]
+      }
+    }
+  }
+}

@@ -464,6 +464,7 @@ class SubspaceGeometricProduct(nn.Module):
         ctx_bn: bool = False,
         proj_bias: bool = False,
         split_in_proj: bool = False,
+        flat_gamma: bool | None = None,
     ) -> None:
         super().__init__()
         if k not in VALID_SUBSPACE_K:
@@ -556,7 +557,8 @@ class SubspaceGeometricProduct(nn.Module):
                 groups=self.num_groups,
                 bias=False,
             )
-            beta_shape = (self.aligned_dim,) if split_in_proj else (1, self.aligned_dim, 1, 1)
+            use_flat_gamma = split_in_proj if flat_gamma is None else flat_gamma
+            beta_shape = (self.aligned_dim,) if use_flat_gamma else (1, self.aligned_dim, 1, 1)
             self.global_beta = nn.Parameter(0.1 * torch.ones(beta_shape))
         else:
             self.ctx_global_proj = None
@@ -1044,6 +1046,7 @@ class SubspaceCliffordBlock(nn.Module):
         ctx_bn: bool = False,
         proj_bias: bool = False,
         split_in_proj: bool = False,
+        flat_gamma: bool | None = None,
     ) -> None:
         super().__init__()
         if block_style not in VALID_BLOCK_STYLES:
@@ -1059,6 +1062,7 @@ class SubspaceCliffordBlock(nn.Module):
         self.interaction_type = interaction_type
         self.use_spatial_diffusion = use_spatial_diffusion and (block_style == "lie_trotter")
 
+        use_flat_gamma = split_in_proj if flat_gamma is None else flat_gamma
         if block_style == "lie_trotter":
             self.spatial_diffusion: nn.Module = (
                 SpatialDiffusion(
@@ -1070,7 +1074,7 @@ class SubspaceCliffordBlock(nn.Module):
                         if norm_mode == "ln2d"
                         else ("rmsnorm2d" if norm_mode in ("rmsnorm2d", "rmsnorm2d_sphere") else "bn")
                     ),
-                    flat_gamma=split_in_proj,
+                    flat_gamma=use_flat_gamma,
                 )
                 if use_spatial_diffusion
                 else nn.Identity()
@@ -1095,6 +1099,7 @@ class SubspaceCliffordBlock(nn.Module):
                 ctx_bn=ctx_bn,
                 proj_bias=proj_bias,
                 split_in_proj=split_in_proj,
+                flat_gamma=use_flat_gamma,
             )
         else:
             self.interaction = RollingGeometricProduct(
@@ -1106,7 +1111,7 @@ class SubspaceCliffordBlock(nn.Module):
                 use_pre_bn=use_pre_bn,
             )
 
-        gamma_shape = (dim,) if split_in_proj else (1, dim, 1, 1)
+        gamma_shape = (dim,) if use_flat_gamma else (1, dim, 1, 1)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(gamma_shape))
         self.drop_path: nn.Module = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -1355,6 +1360,7 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
         ctx_bn: bool = False,
         proj_bias: bool = False,
         split_in_proj: bool = False,
+        flat_gamma: bool | None = None,
     ) -> None:
         super().__init__()
         if len(stage_depths) == 0:
@@ -1452,6 +1458,7 @@ class HierarchicalSubspaceCliffordNet(nn.Module):
                         ctx_bn=ctx_bn,
                         proj_bias=proj_bias,
                         split_in_proj=split_in_proj,
+                        flat_gamma=split_in_proj if flat_gamma is None else flat_gamma,
                     )
                 )
                 dp_idx += 1
@@ -2042,6 +2049,32 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "cli_mode": "inner_wide",
             "ctx_mode": "abs",
             "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    # Exact mirror presets for the matched 2x2 interaction control:
+    # identical backbone, proj_bias=True, dpr=0.20, dw5, differing ONLY in (ctx_mode, ctx_bn).
+    "subspace_hier_k4_ctrl_orig_full": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "full",
+            "ctx_mode": "diff",
+            "ctx_bn": False,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_ctrl_orig_inner_wide": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "inner_wide",
+            "ctx_mode": "diff",
+            "ctx_bn": False,
             "proj_bias": True,
             "drop_path_rate": 0.20,
         },

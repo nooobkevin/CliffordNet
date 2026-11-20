@@ -1,0 +1,152 @@
+{
+  "gpu": "NVIDIA H800",
+  "batch_size": 256,
+  "img_size": 224,
+  "dtype": "bfloat16",
+  "results": [
+    {
+      "label": "Pico RMSNorm2d | PyTorch Eager",
+      "model_size": "in1k_v2_pico_rmsnorm2d",
+      "backend": "pytorch",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 170.93,
+      "imgs_per_sec": 1497.7,
+      "peak_vram_gib": 16.31
+    },
+    {
+      "label": "Pico RMSNorm2d | torch.compile",
+      "model_size": "in1k_v2_pico_rmsnorm2d",
+      "backend": "pytorch",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 76.99,
+      "imgs_per_sec": 3325.2,
+      "peak_vram_gib": 10.57
+    },
+    {
+      "label": "Pico RMSNorm2d | Triton (chunked)",
+      "model_size": "in1k_v2_pico_rmsnorm2d",
+      "backend": "triton",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 115.46,
+      "imgs_per_sec": 2217.2,
+      "peak_vram_gib": 10.18
+    },
+    {
+      "label": "Pico RMSNorm2d | Triton + compile (chunked)",
+      "model_size": "in1k_v2_pico_rmsnorm2d",
+      "backend": "triton",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 73.8,
+      "imgs_per_sec": 3468.9,
+      "peak_vram_gib": 8.58
+    },
+    {
+      "label": "Pico RMSNorm2d | Triton (split_in_proj)",
+      "model_size": "in1k_v2_pico_rmsnorm2d_fast",
+      "backend": "triton",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 99.29,
+      "imgs_per_sec": 2578.2,
+      "peak_vram_gib": 10.79
+    },
+    {
+      "label": "Pico RMSNorm2d | Triton + compile (split_in_proj)",
+      "model_size": "in1k_v2_pico_rmsnorm2d_fast",
+      "backend": "triton",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 8.486,
+      "step_ms": 57.73,
+      "imgs_per_sec": 4434.3,
+      "peak_vram_gib": 8.57
+    },
+    {
+      "label": "Atto v2 | PyTorch Eager",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "pytorch",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 93.92,
+      "imgs_per_sec": 2725.7,
+      "peak_vram_gib": 9.46
+    },
+    {
+      "label": "Atto v2 | torch.compile",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "pytorch",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 45.78,
+      "imgs_per_sec": 5592.3,
+      "peak_vram_gib": 6.1
+    },
+    {
+      "label": "Atto v2 | Triton (chunked)",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "triton",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 62.81,
+      "imgs_per_sec": 4075.9,
+      "peak_vram_gib": 6.02
+    },
+    {
+      "label": "Atto v2 | Triton + compile (chunked)",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "triton",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 44.3,
+      "imgs_per_sec": 5778.3,
+      "peak_vram_gib": 5.06
+    },
+    {
+      "label": "Atto v2 | Triton (split_in_proj)",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "triton",
+      "compile": false,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 53.35,
+      "imgs_per_sec": 4798.7,
+      "peak_vram_gib": 6.34
+    },
+    {
+      "label": "Atto v2 | Triton + compile (split_in_proj)",
+      "model_size": "in1k_v2_atto_k4",
+      "backend": "triton",
+      "compile": true,
+      "dtype": "bfloat16",
+      "batch_size": 256,
+      "params_m": 3.573,
+      "step_ms": 34.2,
+      "imgs_per_sec": 7485.6,
+      "peak_vram_gib": 5.04
+    }
+  ]
+}
