@@ -1,0 +1,86 @@
+[
+  {
+    "name": "m2x2x2_abs_nonorm_full_s42",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Full k=4, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_full", "run.seed=42", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_abs_nonorm_full_s101",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Full k=4, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_full", "run.seed=101", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_abs_nonorm_full_s202",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Full k=4, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_full", "run.seed=202", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_abs_nonorm_inner_s42",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Inner-wide, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_inner_wide", "run.seed=42", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_abs_nonorm_inner_s101",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Inner-wide, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_inner_wide", "run.seed=101", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_abs_nonorm_inner_s202",
+    "track": "Factorial-2x2x2",
+    "description": "Row 2 (abs + no ctx_bn, Inner-wide, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_abs_nonorm_inner_wide", "run.seed=202", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_full_s42",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Full k=4, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_ctxbn_diff", "run.seed=42", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_full_s101",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Full k=4, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_ctxbn_diff", "run.seed=101", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_full_s202",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Full k=4, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_v2_ctxbn_diff", "run.seed=202", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_inner_s42",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Inner-wide, seed=42)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_diff_ctxbn_inner_wide", "run.seed=42", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_inner_s101",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Inner-wide, seed=101)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_diff_ctxbn_inner_wide", "run.seed=101", "wandb.group=wave6_factorial_2x2x2"]
+  },
+  {
+    "name": "m2x2x2_diff_ctxbn_inner_s202",
+    "track": "Factorial-2x2x2",
+    "description": "Row 3 (diff + ctx_bn, Inner-wide, seed=202)",
+    "configs": ["configs/cifar100.yaml"],
+    "overrides": ["model.size=subspace_hier_k4_ctrl_diff_ctxbn_inner_wide", "run.seed=202", "wandb.group=wave6_factorial_2x2x2"]
+  }
+]

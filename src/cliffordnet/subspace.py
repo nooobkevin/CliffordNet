@@ -2079,6 +2079,42 @@ _PRESET_REGISTRY: dict[str, tuple[type[nn.Module], dict[str, Any]]] = {
             "drop_path_rate": 0.20,
         },
     ),
+    "subspace_hier_k4_ctrl_abs_nonorm_full": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "full",
+            "ctx_mode": "abs",
+            "ctx_bn": False,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_ctrl_abs_nonorm_inner_wide": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "inner_wide",
+            "ctx_mode": "abs",
+            "ctx_bn": False,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
+    "subspace_hier_k4_ctrl_diff_ctxbn_inner_wide": (
+        HierarchicalSubspaceCliffordNet,
+        {
+            **_CIFAR_PYRAMID_BASE,
+            "subspace_k": 4,
+            "cli_mode": "inner_wide",
+            "ctx_mode": "diff",
+            "ctx_bn": True,
+            "proj_bias": True,
+            "drop_path_rate": 0.20,
+        },
+    ),
     "subspace_hier_k4_v2_sym": (
         HierarchicalSubspaceCliffordNet,
         {

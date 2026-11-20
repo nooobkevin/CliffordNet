@@ -657,7 +657,7 @@
         Those two equations respond very differently when <span class="math">z<sub>2</sub></span> is smaller than <span class="math">u</span>. In exact arithmetic, subtracting <span class="math">u</span> does nothing to the wedge product because <span class="math">u &wedge; u = 0</span>. In the inner branch, however, the <span class="math">&minus;u<sup>2</sup></span> term pulls the pre-activation strongly negative. Whenever <span class="math">u &odot; v &lt; &minus;1.28</span>, <span class="math">SiLU(x)</span> flattens toward zero and its gradient shrinks. On trained checkpoints under the original <code>diff</code> design, <strong>50% to 55%</strong> of deep-stage inner inputs sat below <code>&minus;1.28</code>, inflating the energy ratio <span class="math">|Wedge| / |Dot|</span> to <strong>18.3&times;</strong>.
       </p>
       <p>
-        Adding normalization after the depthwise context layer (<code>ctx_bn</code>) and switching to <code>ctx_mode="abs"</code> (<span class="math">v = z<sub>2</sub></span>) leaves the mathematical wedge product unchanged while lifting the inner branch out of the negative tail. Try dragging the context scale below to see the asymmetry directly.
+        Switching from <code>diff</code> to <code>abs</code> (<span class="math">v = z<sub>2</sub></span>) leaves the mathematical wedge product unchanged for fixed <span class="math">(u, z<sub>2</sub>)</span>, while adding context normalization (<code>ctx_bn</code>) rescales <span class="math">z<sub>2</sub></span> for both branches (so <span class="math">u &wedge; BN(z<sub>2</sub>) &ne; u &wedge; z<sub>2</sub></span> in general). Below, we test both switches together and separately to isolate which mechanism drives the ranking flip.
       </p>
     </div>
 
@@ -799,16 +799,77 @@
       <p>
         Notice also that <code>ConvNeXt-Atto</code> scores higher than both Subspace-CAN variants on FFT phase-only (<code>46.52%</code> vs. <code>35.78%</code>), which points to its macro block design (100% per-token LayerNorm2d and an explicit FFN).
       </p>
+
+      <div class="callout">
+        <div class="callout-title">Follow-up 2&times;2&times;2 Decomposition &amp; Post-W<sub>out</sub> Forensics (24 CIFAR-100 Runs, 3 Seeds)</div>
+        <p style="margin-bottom:10px;">
+          To decouple removing <span class="math">&minus;u<sup>2</sup></span> (<code>diff &rarr; abs</code>) from restoring context scale (<code>no norm &rarr; ctx_bn</code>), we completed all four context rows across <code>Full</code> and <code>Inner-wide</code> (3 paired seeds each) and measured Stage-3 <code>RMS(z<sub>2</sub>)/RMS(u)</code>, mean <code>|SiLU'(u &odot; v)|</code>, and the <strong>post-W<sub>out</sub> residual update RMS ratio</strong> (after <code>final_proj</code> and LayerScale).
+        </p>
+        <table class="compact" style="margin:6px 0 10px;">
+          <thead>
+            <tr>
+              <th>Context Setting</th>
+              <th class="num">Full</th>
+              <th class="num">Inner-wide</th>
+              <th class="num">Full &minus; Inner</th>
+              <th class="num">z<sub>2</sub>/u</th>
+              <th class="num">|SiLU'|</th>
+              <th class="num">Post-W<sub>out</sub> W/I</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>diff</code> + no norm (Original)</td>
+              <td class="num">78.50 &plusmn; 0.35</td>
+              <td class="num">77.62 &plusmn; 0.25</td>
+              <td class="num" style="color:var(--teal);font-weight:600;">+0.88 &plusmn; 0.16</td>
+              <td class="num">0.42</td>
+              <td class="num" style="color:var(--coral);">0.246</td>
+              <td class="num" style="color:var(--coral);font-weight:600;">12.42&times;</td>
+            </tr>
+            <tr>
+              <td><code>abs</code> + no norm (only remove &minus;u<sup>2</sup>)</td>
+              <td class="num">78.70 &plusmn; 0.23</td>
+              <td class="num">78.85 &plusmn; 0.16</td>
+              <td class="num">&minus;0.14 &plusmn; 0.22</td>
+              <td class="num">0.27</td>
+              <td class="num">0.509</td>
+              <td class="num">2.22&times;</td>
+            </tr>
+            <tr>
+              <td><code>diff</code> + <code>ctx_bn</code> (only restore scale)</td>
+              <td class="num">78.99 &plusmn; 0.06</td>
+              <td class="num">78.87 &plusmn; 0.26</td>
+              <td class="num">+0.12 &plusmn; 0.31</td>
+              <td class="num">2.22</td>
+              <td class="num">0.423</td>
+              <td class="num">3.25&times;</td>
+            </tr>
+            <tr style="background:var(--teal-soft);">
+              <td><strong><code>abs</code> + <code>ctx_bn</code> (Full v2 fix)</strong></td>
+              <td class="num">78.79 &plusmn; 0.32</td>
+              <td class="num"><strong>79.50 &plusmn; 0.11</strong></td>
+              <td class="num" style="color:var(--coral);font-weight:600;">&minus;0.71 &plusmn; 0.30</td>
+              <td class="num">1.47</td>
+              <td class="num"><strong>0.519</strong></td>
+              <td class="num">2.24&times;</td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="margin:0;">
+          Either switch alone eliminates the original <code>+0.88%</code> lead of <code>Full</code>, doubles <code>|SiLU'|</code>, and drops the post-<code>W<sub>out</sub></code> residual imbalance from <code>12.42&times;</code> to <code>2.2&ndash;3.3&times;</code>; combining both gives an additive <code>+1.88%</code> jump on <code>Inner-wide</code>. Zero-retraining inference intervention on the 100-epoch ImageNet-1k <code>v2-Atto Full</code> checkpoint confirms that the trained model genuinely relies on both branches: scaling wedge columns of <code>W<sub>out</sub></code> to <code>g = 0.75</code> drops clean accuracy by <code>&minus;3.45%</code> (71.69% to 68.24%) and FFT phase-only by 44% relative, compared to <code>&minus;2.73%</code> clean and 28% relative FFT drop when scaling inner columns to <code>0.75</code>. Retraining without wedge can substitute for clean accuracy, even though a trained <code>Full</code> model co-adapts heavily to its wedge branch.
+        </p>
+      </div>
     </div>
 
     <!-- SECTION 3: BN INSTABILITY -->
     <div class="l-body" id="instability">
-      <h2>3. Scaling past 8M parameters: why BatchNorm + wedge explodes</h2>
+      <h2>3. Scaling to Pico and Nano: why BatchNorm + wedge destabilizes</h2>
       <p>
-        Paper 2 replaced the per-token <code>LayerNorm2d</code> of Paper 1 with <code>BatchNorm2d</code> for speed. At Atto scale (~3.6M), training stayed stable. Once we scaled the same v2 architecture up to Pico (8.5M) and Nano (14.7M) in <code>bf16</code>, validation began collapsing to <code>val/loss = NaN</code> on <strong>38% to 42%</strong> of epochs (34/90 on Pico, 38/90 on Nano), with peak wedge activations spiking to <code>3,466</code> and <code>5,156</code>.
+        Paper 2 replaced the per-token <code>LayerNorm2d</code> of Paper 1 with <code>BatchNorm2d</code> for speed. At Atto scale (~3.6M), training stayed stable. In our Pico (8.5M) and Nano (14.7M) <code>bf16</code> configurations, validation began collapsing to <code>val/loss = NaN</code> on <strong>38% to 42%</strong> of epochs (34/90 on Pico, 38/90 on Nano), with peak wedge activations spiking to <code>3,466</code> and <code>5,156</code>.
       </p>
       <p>
-        The root cause is a simple scaling mismatch. <code>BatchNorm2d</code> normalizes each channel by variance averaged over the entire batch and spatial grid (<code>B &times; H &times; W &approx; 800,000</code> tokens). A single spatial outlier of magnitude <span class="math">M</span> passes through <code>BatchNorm2d</code> almost untouched. Feeding it into a degree-2 bilinear product <span class="math">u &wedge; v</span> squares the spike to <span class="math">O(M<sup>2</sup>)</span>. That burst corrupts downstream <code>BatchNorm2d</code> running variance, and because our EMA step copies buffers directly into the EMA model, validation loss turns into <code>NaN</code>.
+        Because peak values of 5,156 remain below the <code>bf16</code> overflow ceiling, we treat the exact NaN trigger as a mechanistic hypothesis supported by two mitigation controls. <code>BatchNorm2d</code> normalizes each channel by variance averaged over the batch and spatial grid (<code>B &times; H &times; W &approx; 800,000</code> tokens), so a single spatial outlier of magnitude <span class="math">M</span> passes through nearly intact and gets squared to <span class="math">O(M<sup>2</sup>)</span> inside <span class="math">u &wedge; v</span>, which can destabilize downstream <code>BatchNorm2d</code> running statistics copied into EMA evaluation.
       </p>
       <p>
         Two fixes stop the loop. Keeping <code>BatchNorm2d</code> and normalizing one side of the wedge to unit RMS per <em>k</em>-group (<strong>one-sided sphere norm</strong>, <span class="math">u &wedge; (v / ||v||)</span>) drops the output from degree 2 to degree 1 (<span class="math">O(M)</span>), cutting peak wedge from <code>3,466</code> to <code>55.7</code> with <code>0/64</code> NaNs. Replacing <code>BatchNorm2d</code> with per-token <strong><code>RMSNorm2d</code></strong> bounds both sides (<span class="math">O(1)</span>), clamping peak wedge to <code>64.4</code> with <code>0/90</code> NaNs even at 2&times; higher learning rate (<code>4.0e-3</code>).
@@ -854,25 +915,25 @@
               </thead>
               <tbody>
                 <tr>
-                  <td>Pico BN2d <span style="color:var(--muted);">(lr=2e-3, sq256)</span></td>
+                  <td>Pico BN2d <span style="color:var(--muted);">(lr=2.5e-3, sq256)</span></td>
                   <td class="num" style="color:var(--coral);font-weight:600;">34 / 90</td>
                   <td class="num" style="color:var(--coral);">3,466</td>
                   <td class="num">74.41 / 92.20</td>
                 </tr>
                 <tr>
-                  <td>Nano BN2d <span style="color:var(--muted);">(lr=2e-3, sq256)</span></td>
+                  <td>Nano BN2d <span style="color:var(--muted);">(lr=2.0e-3, sq256)</span></td>
                   <td class="num" style="color:var(--coral);font-weight:600;">38 / 90</td>
                   <td class="num" style="color:var(--coral);">5,156</td>
                   <td class="num">75.94 / 92.93</td>
                 </tr>
                 <tr>
-                  <td>Pico BN2d + Sphere <span style="color:var(--muted);">(lr=2e-3, sq256)*</span></td>
+                  <td>Pico BN2d + Sphere <span style="color:var(--muted);">(lr=2.5e-3, HF)*</span></td>
                   <td class="num" style="color:var(--teal);font-weight:600;">0 / 64</td>
                   <td class="num">55.7</td>
                   <td class="num" style="color:var(--muted);">stopped early</td>
                 </tr>
                 <tr>
-                  <td>Pico RMSNorm2d <span style="color:var(--muted);">(lr=2e-3, sq256)*</span></td>
+                  <td>Pico RMSNorm2d <span style="color:var(--muted);">(lr=2.5e-3, HF)*</span></td>
                   <td class="num" style="color:var(--teal);font-weight:600;">0 / 42</td>
                   <td class="num">58.2</td>
                   <td class="num" style="color:var(--muted);">stopped early</td>
@@ -901,7 +962,7 @@
         </div>
 
         <div class="fig-caption">
-          Hover over the 90-epoch plot to inspect exact validation metrics at every epoch; red markers along the BN2d curve denote epochs where <code>val/loss = NaN</code>. <strong>Methodological note:</strong> rows marked <code>*</code> (Wave E) matched the exact <code>lr=2e-3</code> and square-256 cache of BN2d and confirmed zero NaNs before early stopping. The full 90-epoch <code>RMSNorm2d</code> run (Wave F) also raised LR to <code>4.0e-3</code> and switched to an aspect-ratio-preserving 320&times;320 cache (removing ~1% resize mismatch), reaching <strong>75.43% Top-1 / 92.96% Top-5</strong> (beating ConvNeXt-Pico's 92.85% Top-5 with 6.2% fewer parameters). Stacking sphere norm on top of <code>RMSNorm2d</code> over-constrained contrast (<code>74.58%</code>).
+          Hover over the 90-epoch plot to inspect exact validation metrics at every epoch; red markers along the BN2d curve denote epochs where <code>val/loss = NaN</code>. <strong>Methodological note:</strong> rows marked <code>*</code> (Wave E) matched the exact <code>lr=2.5e-3</code> of Pico BN2d (reading the standard HF ImageNet dataset) and confirmed zero NaNs before early stopping. The full 90-epoch <code>RMSNorm2d</code> run (Wave F) also raised LR to <code>4.0e-3</code> and switched to an aspect-ratio-preserving 320&times;320 cache (removing ~1% resize mismatch), reaching <strong>75.43% Top-1 / 92.96% Top-5</strong> (beating ConvNeXt-Pico's 92.85% Top-5 with 6.2% fewer parameters). Stacking sphere norm on top of <code>RMSNorm2d</code> over-constrained contrast (<code>74.58%</code>).
         </div>
       </div>
     </div>
@@ -922,7 +983,7 @@
         Single-operator speedups rarely transfer one-to-one into full training speed. When we first plugged the Triton kernel into <code>Subspace-CAN-v2-Pico</code>, end-to-end training with <code>torch.compile</code> was only <strong>+4.3% faster</strong> than pure <code>torch.compile</code> (<code>3,469</code> vs. <code>3,325 img/s</code>), even though it already saved 19% peak VRAM. Profiling exposed the culprit: calling <code>.chunk(2, dim=1)</code> on a <code>channels_last</code> (NHWC) tensor produces non-contiguous strided views, forcing the Triton backward pass onto a slow strided fallback that spent 25.8% of total CUDA time copying memory.
       </p>
       <p>
-        Splitting the single 1&times;1 projection into two contiguous 1&times;1 convolutions (<code>split_in_proj=True</code>) eliminates the strided view with identical parameter count and math. End-to-end throughput then jumps to <strong>4,434 img/s on Pico (+33.4% over <code>torch.compile</code>, 2.96&times; over eager)</strong> and <strong>7,486 img/s on Atto (+33.9% over <code>torch.compile</code>)</strong> while cutting peak VRAM nearly in half vs. eager.
+        Splitting the single 1&times;1 projection into two contiguous 1&times;1 convolutions (<code>split_in_proj=True</code>) eliminates the strided view with identical parameter count and math. A pure <code>torch.compile + split_in_proj</code> control (without Triton) yields essentially zero gain on its own (<code>3,265</code> vs. <code>3,325 img/s</code> on Pico; <code>5,699</code> vs. <code>5,594 img/s</code> on Atto), confirming that the layout rewrite only unlocks speed when paired with the fused kernel. Combined with Triton, end-to-end throughput jumps to <strong>4,460 img/s on Pico (+34.2% over <code>torch.compile</code>, 2.98&times; over eager)</strong> and <strong>7,559 img/s on Atto (+35.1% over <code>torch.compile</code>)</strong> while cutting peak VRAM by 18% vs. <code>torch.compile</code> and nearly in half vs. eager.
       </p>
     </div>
 
@@ -964,17 +1025,17 @@
       <ul class="clean">
         <li>Matching parameter counts does not guarantee a fair ablation when a shared preprocessing step (here, <code>v = z<sub>2</sub> &minus; u</code> without context normalization) pushes one branch into a nonlinearity's dead-zone while leaving the other algebraically invariant. Inspect per-branch activation distributions before interpreting accuracy gaps.</li>
         <li>Once the inner branch is healthy, pure diagonal gating matches or beats full Clifford blocks on clean accuracy (<code>+1.56 &plusmn; 0.55%</code> matched 2&times;2 interaction on CIFAR-100; tie at <code>71.1%</code> on 100-epoch ImageNet-1k). Antisymmetric wedge features keep a repeatable edge on feature effective rank and FFT phase-only robustness across both datasets.</li>
-        <li>Mixing degree-2 bilinear products with <code>BatchNorm2d</code> breaks past 8M parameters because single-token outliers get squared into BN running statistics. Per-token <code>RMSNorm2d</code> (or one-sided sphere normalization when BN is required) eliminates the NaNs without auxiliary orthogonality losses.</li>
-        <li>An isolated 9.6&times; Triton kernel still loses most of its end-to-end gain if a preceding <code>.chunk()</code> breaks NHWC contiguity. Replacing it with contiguous projections (<code>split_in_proj</code>) turns that memory reduction into a +33% full-step throughput gain over <code>torch.compile</code>.</li>
+        <li>Mixing degree-2 bilinear products with <code>BatchNorm2d</code> destabilized our Pico and Nano <code>bf16</code> runs, producing 34 to 38 NaN validation epochs per 90-epoch schedule. Per-token <code>RMSNorm2d</code> (or one-sided sphere normalization when BN is required) eliminated those NaNs without auxiliary orthogonality losses.</li>
+        <li>An isolated 9.6&times; Triton kernel still loses most of its end-to-end gain if a preceding <code>.chunk()</code> breaks NHWC contiguity. Replacing it with contiguous projections (<code>split_in_proj</code>) changes nothing under pure <code>torch.compile</code>, but unlocks +34% to +35% full-step throughput and &minus;18% VRAM when paired with the Triton kernel.</li>
       </ul>
 
       <details>
         <summary>Experimental protocol, hardware, and reproducibility notes</summary>
         <p style="margin-top:8px;">
-          All experiments were executed in PyTorch 2.10 + Triton 3.6 on an 8&times; NVIDIA H800 node across 70 total runs (42 CIFAR-100 200-epoch single-GPU runs in <code>fp32</code>; 28 ImageNet-1k 10, 25, 90, and 100-epoch DDP runs in <code>bf16-mixed</code> with Global BS = 1024, AdamW, cosine decay, Mixup 0.8, CutMix 1.0, EMA 0.9998, and <code>ortho_weight = 0.0</code>). Exact parameter parity with Tables 2 to 4 of <code>arXiv:2610.37226</code> is verified in <code>tests/test_subspace_models.py</code>, and Triton forward/backward numerical parity (including a CUDA <code>gridY &gt; 65,535</code> fix needed at Nano scale) is verified in <code>tests/test_triton_subspace.py</code>.
+          All experiments were executed in PyTorch 2.10 + Triton 3.6 on an 8&times; NVIDIA H800 node across 82 total runs (54 CIFAR-100 200-epoch single-GPU runs in <code>fp32</code>, including the full 24-run 2&times;2&times;2 context factorial; 28 ImageNet-1k 10, 25, 90, and 100-epoch DDP runs in <code>bf16-mixed</code> with Global BS = 1024, AdamW, cosine decay, Mixup 0.8, CutMix 1.0, EMA 0.9998, and <code>ortho_weight = 0.0</code>). Exact parameter parity with Tables 2 to 4 of <code>arXiv:2610.37226</code> is verified in <code>tests/test_subspace_models.py</code>, and Triton forward/backward numerical parity (including a CUDA <code>gridY &gt; 65,535</code> fix needed at Nano scale) is verified in <code>tests/test_triton_subspace.py</code>.
         </p>
         <p style="margin-bottom:0;">
-          All sanitized per-epoch CSV logs, JSON result summaries, corruption benchmarks, and scripts to regenerate every number on this page live in <a href="https://github.com/nooobkevin/CliffordNet/tree/main/experiments/subspace_study">experiments/subspace_study/</a>.
+          All sanitized per-epoch CSV logs, JSON result summaries, corruption benchmarks, and scripts to regenerate every number on this page live in <a href="https://github.com/nooobkevin/CliffordNet/tree/main/experiments/subspace_study">experiments/subspace_study/</a>. A follow-up study extending this question beyond CliffordNet to general exchange-symmetric, antisymmetric, and learnable bilinear adapters lives at <a href="https://github.com/nooobkevin/exchange-symmetry-vision">nooobkevin/exchange-symmetry-vision</a>.
         </p>
       </details>
     </div>
@@ -983,6 +1044,7 @@
       <div><strong>CliffordNet Empirical Study</strong> &middot; Hosted via GitHub Pages from <code>nooobkevin/CliffordNet</code></div>
       <div class="link-grid">
         <a href="https://github.com/nooobkevin/CliffordNet">GitHub Repository</a>
+        <a href="https://github.com/nooobkevin/exchange-symmetry-vision">Follow-Up: Exchange Symmetry in Vision</a>
         <a href="https://github.com/nooobkevin/CliffordNet/blob/main/docs/subspace_clifford_research_report.md">Full Research Report</a>
         <a href="https://github.com/nooobkevin/CliffordNet/blob/main/docs/engineering_and_tuning_playbook.md">H800 Tuning Playbook</a>
         <a href="https://github.com/ParaMind2025/CAN/issues/8">CAN Issue #8 Thread</a>

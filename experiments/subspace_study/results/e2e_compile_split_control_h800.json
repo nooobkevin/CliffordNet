@@ -1,0 +1,76 @@
+{
+  "pico_chunked_compile_pytorch": {
+    "model_size": "in1k_v2_pico_rmsnorm2d",
+    "backend": "pytorch",
+    "params_m": 8.486,
+    "use_compile": true,
+    "extra_overrides": {
+      "flat_gamma": true
+    },
+    "ms_per_step": 77.0,
+    "img_per_sec": 3324.7,
+    "peak_vram_gib": 10.57
+  },
+  "pico_split_compile_pytorch": {
+    "model_size": "in1k_v2_pico_rmsnorm2d_fast",
+    "backend": "pytorch",
+    "params_m": 8.486,
+    "use_compile": true,
+    "extra_overrides": {
+      "flat_gamma": true
+    },
+    "ms_per_step": 78.4,
+    "img_per_sec": 3265.3,
+    "peak_vram_gib": 10.53
+  },
+  "pico_split_compile_triton": {
+    "model_size": "in1k_v2_pico_rmsnorm2d_fast",
+    "backend": "triton",
+    "params_m": 8.486,
+    "use_compile": true,
+    "extra_overrides": {
+      "flat_gamma": true
+    },
+    "ms_per_step": 57.4,
+    "img_per_sec": 4460.2,
+    "peak_vram_gib": 8.58
+  },
+  "atto_chunked_compile_pytorch": {
+    "model_size": "in1k_v2_atto_k4",
+    "backend": "pytorch",
+    "params_m": 3.573,
+    "use_compile": true,
+    "extra_overrides": {
+      "flat_gamma": true
+    },
+    "ms_per_step": 45.77,
+    "img_per_sec": 5593.6,
+    "peak_vram_gib": 6.11
+  },
+  "atto_split_compile_pytorch": {
+    "model_size": "in1k_v2_atto_k4",
+    "backend": "pytorch",
+    "params_m": 3.573,
+    "use_compile": true,
+    "extra_overrides": {
+      "split_in_proj": true,
+      "flat_gamma": true
+    },
+    "ms_per_step": 44.92,
+    "img_per_sec": 5699.3,
+    "peak_vram_gib": 6.07
+  },
+  "atto_split_compile_triton": {
+    "model_size": "in1k_v2_atto_k4",
+    "backend": "triton",
+    "params_m": 3.573,
+    "use_compile": true,
+    "extra_overrides": {
+      "split_in_proj": true,
+      "flat_gamma": true
+    },
+    "ms_per_step": 33.87,
+    "img_per_sec": 7559.0,
+    "peak_vram_gib": 5.04
+  }
+}
